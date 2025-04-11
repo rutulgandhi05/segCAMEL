@@ -181,3 +181,8 @@ hercules_dataset_download/temp.toml
 test.jpg
 commands.txt
 run_output.txt
+token.pickle
+
+data
+data/
+data/hercules
