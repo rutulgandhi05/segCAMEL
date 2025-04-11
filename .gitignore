@@ -179,3 +179,5 @@ hercules_dataset_download/hercules.json
 hercules_dataset_download/temp.toml
 
 test.jpg
+commands.txt
+run_output.txt
