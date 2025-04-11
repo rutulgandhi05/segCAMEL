@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Hercules dataset
+hercules_dataset_download/token.pickle 
+hercules_dataset_download/hercules.json
+hercules_dataset_download/temp.toml
+
+test.jpg
