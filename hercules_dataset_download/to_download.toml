@@ -2,4 +2,4 @@ folders = ["Mountain_01_Day","Mountain_02_Night","Mountain_03_Day","Library_01_D
 
 files =  ["avea_gt.txt", "gps.csv","data_stamp.csv",  "stereo_stamp.csv", "stereo_right.yaml", "stereo_left.yaml"]
 
-output_folder = ""
+output_folder = "thesis_project\hercules"
