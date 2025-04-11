@@ -1,1 +1,1 @@
-python segCAMEL/hercules_dataset_download/gdrive_extract.py
+python hercules_dataset_download/gdrive_extract.py
