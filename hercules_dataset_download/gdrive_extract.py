@@ -11,7 +11,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-CLIENT_SECRETS_FILE = "./hercules.json"
+CLIENT_SECRETS_FILE = "hercules_dataset_download/hercules.json"
 SCOPES = ['https://www.googleapis.com/auth/drive']
 local_path = os.path.join(os.getcwd(), "exports")
 
@@ -20,8 +20,8 @@ if not os.path.exists(local_path):
 
 def get_google_auth_user_info():
     creds = None
-    if os.path.exists('./token.pickle'):
-        with open('token.pickle', 'rb') as token:
+    if os.path.exists('hercules_dataset_download/token.pickle'):
+        with open('hercules_dataset_download/token.pickle', 'rb') as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -55,7 +55,7 @@ def download_files(service, file_id, filename):
         f.close()
 
 def main():
-    to_download = toml.load("./to_download.toml")
+    to_download = toml.load("hercules_dataset_download/to_download.toml")
     service = create_service()
     out_folder = Path(to_download.get("output_folder"))
     if not os.path.exists(out_folder):
