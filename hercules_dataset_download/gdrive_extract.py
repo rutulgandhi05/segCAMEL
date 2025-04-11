@@ -61,7 +61,7 @@ def main():
     if not os.path.exists(out_folder):
         raise Exception(f"Output folder {out_folder} does not exist. Please create it first.")
     
-    metadata = json.load(open("hercules.json"))
+    metadata = json.load(open("hercules_dataset_download/hercules.json"))
     for obj in metadata:
         current_folder = obj.get("folder")
         print(f"\n####### Current folder: {current_folder} #######")
