@@ -8,6 +8,7 @@ from foxglove_schemas_protobuf.Pose_pb2 import Pose as PB_Pose
 from foxglove_schemas_protobuf.Quaternion_pb2 import Quaternion as PB_Quaternion
 from foxglove_schemas_protobuf.Vector3_pb2 import Vector3 as PB_Vector3
 from foxglove_schemas_protobuf.PointCloud_pb2 import PointCloud as PB_PointCloud
+from hercules.transforms import get_stereo_lidar_transforms_msgs
 
 INTENSITY_THRESHOLD = 1691936557946849179
 
@@ -29,7 +30,7 @@ def read_aeva_bin(bin_path: Path):
     return point_size, raw_data
 
 
-def read_aeva_bin_for_foxglove(bin_path, timestamp):
+def read_aeva_bin_for_foxglove(bin_path: Path, timestamp: int):
     """
     Reads a .bin file and constructs a Foxglove-compatible PointCloud message.
     It trims any extra incomplete bytes, ensuring the binary data length is a multiple
@@ -71,12 +72,23 @@ def read_aeva_bin_for_foxglove(bin_path, timestamp):
 def test():
     # Example usage
     bin_file_paths = list(Path("data/aeva").glob("*.bin"))
-    output_mcap_path = Path("data/1724813019217024258_aeva.mcap")
+    output_aeva_mcap_path = Path("data/1724813019217024258_aeva.mcap")
+    output_transform_mcap_path = Path("data/1724813019217024258_aeva_transforms.mcap")
+
+    transformantion_matrix_lcam = [[0.022023532009715, -0.999669977147658, 0.013225007652863, 0.254288466421238],
+                            [-0.049191798363281, -0.014295738779819, -0.998687037477971, -0.108349681409513],
+                            [0.998546509188032, 0.021344054027771, -0.049490406606293,  -0.136209414128968]
+                            ]
     
     foxglove_msgs = [(read_aeva_bin_for_foxglove(bin_path, timestamp=int(bin_path.stem)), int(bin_path.stem)) for bin_path in bin_file_paths]
+    transform_msgs = [get_stereo_lidar_transforms_msgs(int(bin_path.stem), transformantion_matrix_lcam=transformantion_matrix_lcam) for bin_path in bin_file_paths]
+    all_transform_msgs = [msg for sublist in transform_msgs for msg in sublist]
 
-    write_to_mcap(foxglove_msgs, output_mcap_path, topic="hercules/aeva")
-    print(f"Converted to {output_mcap_path}")
+    write_to_mcap(foxglove_msgs, output_aeva_mcap_path, topic="hercules/aeva")
+    print(f"Converted Aeva data to {output_aeva_mcap_path}")
+
+    write_to_mcap(all_transform_msgs, output_transform_mcap_path, topic="hercules/transform")
+    print(f"Converted Aeva transform data to {output_transform_mcap_path}")
 
 if __name__ == '__main__':
     test()

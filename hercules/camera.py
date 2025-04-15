@@ -19,17 +19,21 @@ def read_stereo_image(image_path: Path):
 
     return compressed_msg_data
 
-def read_stereo_image_for_foxglove(image_path: Path, timestamp: int):
+def read_stereo_image_for_foxglove(image_path: Path, 
+                                  distortion_param=[0.0, 0.0, 0.0, 0.0, 0.0], 
+                                  intrinsic_param=[490.236943, 0, 735.976246, 0, 489.942011, 582.303908, 0, 0, 1]):
     """
-    Reads a stereo image and constructs a Foxglove-compatible PointCloud message.
+    Reads a stereo image and constructs Foxglove-compatible CompressedImage and CameraCalibration messages.
     
     Args:
-      image_path (str): Path to the .bin file.
-      timestamp (int, optional): Timestamp in nanoseconds used for selecting the record format.
+        image_path (Path): Path to the stereo image file.
+        distortion_param (list, optional): Camera distortion parameters for calibration.
+        intrinsic_param (list, optional): Camera intrinsic parameters for calibration.
     
     Returns:
-      PB_PointCloud: A Foxglove-compatible PointCloud message.
+        list: A list containing a Foxglove-compatible CompressedImage message and CameraCalibration message.
     """
+    timestamp = int(image_path.stem)
     compressed_msg_data = read_stereo_image(image_path)
 
     camera_info_msg = PBCameraInfo(**{
@@ -37,7 +41,19 @@ def read_stereo_image_for_foxglove(image_path: Path, timestamp: int):
             "height": 1080,
             "width": 1920,
             "distortion_model": 'plumb_bob',
-            "timestamp": datetime.fromtimestamp(timestamp/1000000000)
+            "timestamp": datetime.fromtimestamp(timestamp/1000000000),
+            "D":  distortion_param,
+            "K": intrinsic_param,
+            "R": [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0]
+            ],
+            "P": [
+                [490.236943, 0, 735.976246, 0.0],
+                [0.0,            489.942011, 582.303908,   0.0],
+                [0.0,            0.0,        1.0,          0.0]
+                ],
         })
 
     msg = {
@@ -48,6 +64,7 @@ def read_stereo_image_for_foxglove(image_path: Path, timestamp: int):
     }
 
     return [PBCompreesedImage(**msg), camera_info_msg]
+
 
 def test():
     # Example usage
@@ -62,7 +79,7 @@ def test():
     image_file_paths = [image_path for image_path in tqdm(image_file_paths, desc='Filtering for relevant data.') if fmcw_start_stamp <= datetime.fromtimestamp(int(image_path.stem)/1000000000) <= fmcw_end_stamp]
     output_mcap_path = Path("data/1724813019217024258_stereo.mcap")
    
-    foxglove_msgs = [(read_stereo_image_for_foxglove(image_path, timestamp=int(image_path.stem)), int(image_path.stem)) for image_path in tqdm(image_file_paths, desc="Gererating messages for MCAP")]
+    foxglove_msgs = [(read_stereo_image_for_foxglove(image_path), int(image_path.stem)) for image_path in tqdm(image_file_paths, desc="Gererating messages for MCAP")]
 
     write_to_mcap(foxglove_msgs, output_mcap_path, topic="hercules/stereo")
     print(f"Converted to {output_mcap_path}")
