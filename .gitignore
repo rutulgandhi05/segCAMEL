@@ -174,9 +174,9 @@ cython_debug/
 .pypirc
 
 # Hercules dataset
-hercules_dataset_download/token.pickle 
-hercules_dataset_download/hercules.json
-hercules_dataset_download/temp.toml
+hercules/dataset_download/token.pickle 
+hercules/dataset_download/hercules.json
+hercules/dataset_download/temp.toml
 
 test.jpg
 commands.txt
@@ -186,3 +186,4 @@ token.pickle
 data
 data/
 data/hercules
+meta_Checkpoint/

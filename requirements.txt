@@ -3,3 +3,10 @@ google-auth-oauthlib
 toml
 tqdm
 requests
+torch
+torchvision
+opencv-python
+numpy
+segment-anything
+matplotlib
+pillow
