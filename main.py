@@ -1,4 +1,5 @@
 from pathlib import Path
+from tqdm import tqdm
 from datetime import datetime
 from hercules.aeva import read_aeva_bin_for_foxglove
 from hercules.transforms import get_stereo_lidar_transforms_msgs
@@ -104,16 +105,12 @@ def stereo_image_to_mcap(data_folder_path:Path):
         image_file_paths = [image_path for image_path in image_file_paths if mcaps_start_stamp <= image_path.stem <= mcaps_end_stamp]
         chunks.append(image_file_paths)
 
-    didistortion_param = [-0.007761339207475, 0.0009533009641353071]
-    
-    intrinsic_param = [
-        [490.2369426861542, 0.0, 735.9762455083395],
-        [0.0, 489.9420108174773, 582.3039081302234],
-        [0.0, 0.0, 1.0]
-        ]
+    distortion_param = [-0.007761339207475, 0.0009533009641353071]
+    intrinsic_param = [490.2369426861542, 0.0, 735.9762455083395, 0.0, 489.9420108174773, 582.3039081302234, 0.0, 0.0, 1.0]
+     
 
     for chunk in chunks:
-        foxglove_msgs = [(read_stereo_image_for_foxglove(image_path, distortion_param=didistortion_param, intrinsic_param=intrinsic_param), int(image_path.stem)) for image_path in chunk]
+        foxglove_msgs = [(read_stereo_image_for_foxglove(image_path, distortion_param=distortion_param, intrinsic_param=intrinsic_param), int(image_path.stem)) for image_path in tqdm(chunk, desc="Generating stereo messages for MCAP")]
 
         output_mcap_path = Path(f"{data_folder_path}/mcaps/{chunk[0].stem}_to_{chunk[-1].stem}_stereo.mcap")
         if not output_mcap_path.parent.exists():
@@ -124,6 +121,6 @@ def stereo_image_to_mcap(data_folder_path:Path):
 
 if __name__ == '__main__':
     data_folder_path = Path("data")
-    aeva_binfile_to_mcap(data_folder_path)
+    #aeva_binfile_to_mcap(data_folder_path)
     stereo_image_to_mcap(data_folder_path)
     print("Conversion completed successfully.")

@@ -23,7 +23,7 @@ def get_stereo_lidar_transforms_msgs(timestamp: int, transformantion_matrix_lcam
         transform_l = PB_FrameTransform(translation = PB_Vector3(x=translation_lcam[0], y=translation_lcam[1], z=translation_lcam[2]),
                                         rotation = PB_Quaternion(x=R_caml[0], y=R_caml[1], z=R_caml[2], w=R_caml[3]))
         transform_l.timestamp = stamp
-        transform_l.parent_frame_id = "stereo_left"
+        transform_l.parent_frame_id = "stereo"
         transform_l.child_frame_id = "aeva"
         transforms.append([transform_l, timestamp])
     
@@ -38,7 +38,7 @@ def get_stereo_lidar_transforms_msgs(timestamp: int, transformantion_matrix_lcam
         transform_r = PB_FrameTransform(translation = PB_Vector3(x=translation_rcam[0], y=translation_rcam[1], z=translation_rcam[2]), 
                                         rotation = PB_Quaternion(x=R_camr[0], y=R_camr[1], z=R_camr[2], w=R_camr[3]) )
         transform_r.timestamp = stamp
-        transform_r.parent_frame_id = "stereo_right"
+        transform_r.parent_frame_id = "stereo"
         transform_r.child_frame_id = "aeva"
         transforms.append([transform_r, timestamp])
 

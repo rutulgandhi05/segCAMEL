@@ -20,8 +20,8 @@ def read_stereo_image(image_path: Path):
     return compressed_msg_data
 
 def read_stereo_image_for_foxglove(image_path: Path, 
-                                  distortion_param=[0.0, 0.0, 0.0, 0.0, 0.0], 
-                                  intrinsic_param=[490.236943, 0, 735.976246, 0, 489.942011, 582.303908, 0, 0, 1]):
+                                  distortion_param=None, 
+                                  intrinsic_param=None):
     """
     Reads a stereo image and constructs Foxglove-compatible CompressedImage and CameraCalibration messages.
     
@@ -37,23 +37,15 @@ def read_stereo_image_for_foxglove(image_path: Path,
     compressed_msg_data = read_stereo_image(image_path)
 
     camera_info_msg = PBCameraInfo(**{
-            "frame_id": "stereo_info",
+            "frame_id": "stereo",
             "height": 1080,
             "width": 1920,
             "distortion_model": 'plumb_bob',
             "timestamp": datetime.fromtimestamp(timestamp/1000000000),
             "D":  distortion_param,
             "K": intrinsic_param,
-            "R": [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0]
-            ],
-            "P": [
-                [490.236943, 0, 735.976246, 0.0],
-                [0.0,            489.942011, 582.303908,   0.0],
-                [0.0,            0.0,        1.0,          0.0]
-                ],
+            "R": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            "P": [490.236943, 0, 735.976246, 0.0, 0.0, 489.942011, 582.303908, 0.0, 0.0, 0.0, 1.0, 0.0],
         })
 
     msg = {
