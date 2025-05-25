@@ -1,8 +1,48 @@
-from pathlib import Path
+import toml
+
 from tqdm import tqdm
-from foxglove_schemas_protobuf.PointCloud_pb2 import PointCloud as PB_PointCloud
+from pathlib import Path   
 from mcap_protobuf.writer import Writer
 from datetime import timedelta, datetime
+from foxglove_schemas_protobuf.PointCloud_pb2 import PointCloud as PB_PointCloud
+
+def read_toml_file(file_path: Path):
+    """
+    Reads a TOML file and returns its content as a dictionary.
+    
+    Args:
+        file_path (str): Path to the TOML file.
+        
+    Returns:
+        dict: Content of the TOML file.
+    """
+    try:
+        with file_path.open("r") as f:
+            data = toml.load(f)
+        return data
+    except Exception as e:
+        print(f"Error reading TOML file: {e}")
+        return None
+    
+    
+def read_txt_file(file_path: Path):
+    """
+    Reads a text file and returns its content as a list of lines.
+    
+    Args:
+        file_path (str): Path to the text file.
+        
+    Returns:
+        list: List of lines in the text file.
+    """
+    try:
+        with file_path.open("r") as f:
+            lines = f.readlines()
+        return [line.strip() for line in lines]
+    except Exception as e:
+        print(f"Error reading text file: {e}")
+        return None
+    
 
 def write_to_mcap(foxglove_msgs: list[tuple[PB_PointCloud, int]], output_mcap_path: Path, topic="/hercules/"):
     """
@@ -37,6 +77,7 @@ def write_to_mcap(foxglove_msgs: list[tuple[PB_PointCloud, int]], output_mcap_pa
     except Exception as e:
         raise ValueError(f"Error writing to MCAP: {e}")
     
+
 def get_chunks(data: list[Path]):
     if not data:
         return []

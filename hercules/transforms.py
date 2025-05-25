@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime
-from misc.mcap_writer import write_to_mcap
+from utils.files import write_to_mcap
 from mcap_protobuf.reader import read_protobuf_messages as PBReader
 from foxglove_schemas_protobuf.FrameTransform_pb2 import FrameTransform as PB_FrameTransform
 from foxglove_schemas_protobuf.Vector3_pb2 import Vector3 as PB_Vector3

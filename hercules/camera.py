@@ -2,7 +2,7 @@ import cv2
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
-from misc.mcap_writer import write_to_mcap
+from utils.files import write_to_mcap
 from mcap_protobuf.reader import read_protobuf_messages as PBReader
 from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage as PBCompreesedImage
 from foxglove_schemas_protobuf.CameraCalibration_pb2 import CameraCalibration as PBCameraInfo
