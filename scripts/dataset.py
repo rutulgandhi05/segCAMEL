@@ -51,7 +51,7 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
         stereo_right_distortion = None
 
     # Load extrinsic between LiDAR and stereo cameras from text file
-    stereo_lidar_path = calib_folder / "Stereo_LiDAR.txt"
+    stereo_lidar_path = calib_folder / "stereo_lidar.txt"
     stereo_lidar_lines = stereo_lidar_path.open("r").read().splitlines()
     # second line: left camera extrinsic, fourth line: right camera extrinsic
 
