@@ -20,3 +20,5 @@ foxglove-schemas-protobuf
 opencv-python
 open3d
 pandas
+timm
+flash-attn
