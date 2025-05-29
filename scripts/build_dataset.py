@@ -10,8 +10,8 @@ from scripts.dataset import load_hercules_dataset_folder
 from scripts.project_2d_to_3d import LabelProjector, project_points_to_dino_patches
 from scripts.twod_feature_extractor import DINOv2FeatureExtractor
 
-RAW_FOLDER   = Path("data/raw/dataset1")
-OUT_FOLDER   = Path("data/processed")
+RAW_FOLDER   = Path("data/hercules/Mountain_01_Day/")
+OUT_FOLDER   = Path("data/hercules/processed/Mountain_01_Day/")
 OUT_TRAIN    = OUT_FOLDER / "train"
 OUT_VAL      = OUT_FOLDER / "val"
 GRID_SIZE    = 0.05
