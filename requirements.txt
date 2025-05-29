@@ -3,11 +3,15 @@
 torch==2.5.0 
 torchvision==0.20.0 
 torchaudio==2.5.0 
-torch-scatter -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-torch-cluster -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-torch-sparse -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
+
+--find-links https://data.pyg.org/whl/torch-2.6.0+cu124.html
+torch_scatter 
+torch_sparse 
+torch_cluster 
 torch_geometric
+
 addict 
 scipy 
 spconv-cu124
 open3d
+toml
