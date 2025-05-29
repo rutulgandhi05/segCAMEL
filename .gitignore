@@ -179,6 +179,7 @@ hercules/dataset_download/hercules.json
 hercules/dataset_download/temp.toml
 
 test.jpg
+test.py
 commands.txt
 run_output.txt
 token.pickle

@@ -11,6 +11,7 @@ from functools import partial
 from addict import Dict
 import math
 import torch
+import types
 import torch.nn as nn
 import spconv.pytorch as spconv
 import torch_scatter
@@ -716,6 +717,7 @@ class SerializedUnpooling(PointModule):
     def __init__(
         self,
         in_channels,
+        dino_channels,
         skip_channels,
         out_channels,
         norm_layer=None,
@@ -735,8 +737,20 @@ class SerializedUnpooling(PointModule):
             self.proj_skip.add(act_layer())
 
         self.traceable = traceable
+        
+        #############################
+        self.dino_channels = dino_channels
+        if self.dino_channels  is not None:
+            self.proj_dino = nn.Sequential(
+                nn.Linear(self.dino_channels , out_channels),  # out_channels = output feat dim for this stage
+                nn.BatchNorm1d(out_channels),
+                nn.GELU()
+            )
+        else:
+            self.proj_dino = None
+        #############################
 
-    def forward(self, point):
+    def forward(self, point, dino_feat=None):
         assert "pooling_parent" in point.keys()
         assert "pooling_inverse" in point.keys()
         parent = point.pop("pooling_parent")
@@ -744,6 +758,13 @@ class SerializedUnpooling(PointModule):
         point = self.proj(point)
         parent = self.proj_skip(parent)
         parent.feat = parent.feat + point.feat[inverse]
+        parent.coord = parent.coord + point.coord[inverse]
+
+        #############################
+        if self.proj_dino is not None and dino_feat is not None:
+            parent.feat = parent.feat + self.proj_dino(dino_feat)
+
+        #############################
 
         if self.traceable:
             parent["unpooling_parent"] = point
@@ -787,6 +808,7 @@ class PointTransformerV3(PointModule):
     def __init__(
         self,
         in_channels=6,
+        dino_channels=None,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -822,6 +844,8 @@ class PointTransformerV3(PointModule):
         self.order = [order] if isinstance(order, str) else order
         self.cls_mode = cls_mode
         self.shuffle_orders = shuffle_orders
+        self.dino_channels = dino_channels
+
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
@@ -934,6 +958,7 @@ class PointTransformerV3(PointModule):
                         out_channels=dec_channels[s],
                         norm_layer=bn_layer,
                         act_layer=act_layer,
+                        dino_channels=self.dino_channels,  # <-- NEW
                     ),
                     name="up",
                 )
@@ -961,6 +986,20 @@ class PointTransformerV3(PointModule):
                         ),
                         name=f"block{i}",
                     )
+
+                ################################
+                def dec_forward(self, input, dino_feat=None):
+                    for k, module in self._modules.items():
+                        if isinstance(module, SerializedUnpooling):
+                            input = module(input, dino_feat=dino_feat)
+                        else:
+                            input = module(input)
+                    return input
+                
+                dec.forward = types.MethodType(dec_forward, dec)
+
+                ################################
+
                 self.dec.add(module=dec, name=f"dec{s}")
 
     def forward(self, data_dict):
@@ -978,5 +1017,5 @@ class PointTransformerV3(PointModule):
         point = self.embedding(point)
         point = self.enc(point)
         if not self.cls_mode:
-            point = self.dec(point)
+            point = self.dec(point, dino_feat=data_dict.get('dino_feat', None))
         return point

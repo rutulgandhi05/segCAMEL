@@ -1,1 +1,1 @@
-python hercules_dataset_download/gdrive_extract.py
+python -m scripts.build_dataset

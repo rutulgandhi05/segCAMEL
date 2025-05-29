@@ -1,56 +1,71 @@
 import numpy as np
-import cv2
+from typing import Tuple
 
 class LabelProjector:
-    """
-    Projects 2D mask labels onto 3D point clouds using camera intrinsics and extrinsics.
-    Designed to be dataset-agnostic: pass calibration and mapping as arguments.
-    """
-    def __init__(self, intrinsic, extrinsic=None, image_shape=None):
+    def __init__(self,
+                 intrinsic: np.ndarray,      # 3×3 (or 3×4) camera intrinsic matrix
+                 extrinsic: np.ndarray,      # 4×4 transform from LiDAR to camera frame
+                 image_shape: Tuple[int,int]  # (H, W)
+                 ):
         """
-        Args:
-            intrinsic: (3, 3) numpy array, camera intrinsic matrix
-            extrinsic: (4, 4) numpy array, camera extrinsic matrix (world-to-camera or lidar-to-camera)
-            image_shape: (H, W) tuple, shape of the 2D mask/image
+        Initialize with camera calibration.
         """
-        self.intrinsic = intrinsic
-        self.extrinsic = extrinsic
-        self.image_shape = image_shape
+        self.K = intrinsic
+        self.T = extrinsic
+        self.H, self.W = image_shape
 
-    def project_points(self, points_3d):
+    def project_points(self, points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Projects 3D points to 2D image plane.
-        Args:
-            points_3d: (N, 3) numpy array
+        Project Nx3 LiDAR points into pixel coordinates.
         Returns:
-            points_2d: (N, 2) numpy array of pixel coordinates
+          - uv: (N,2) float array of (u, v) locations
+          - valid: (N,) boolean mask of points with positive depth
         """
-        N = points_3d.shape[0]
-        points_h = np.concatenate([points_3d, np.ones((N, 1))], axis=1)  # (N, 4)
-        if self.extrinsic is not None:
-            points_cam = (self.extrinsic @ points_h.T).T[:, :3]
-        else:
-            points_cam = points_3d
-        # Project to image
-        points_proj = (self.intrinsic @ points_cam.T).T  # (N, 3)
-        points_proj = points_proj[:, :2] / points_proj[:, 2:3]
-        return points_proj
+        # to homogeneous
+        pts_h = np.hstack([points, np.ones((points.shape[0],1), dtype=points.dtype)])
+        # transform to camera frame
+        cam_pts = pts_h @ self.T.T            # (N,4)
+        valid = cam_pts[:,2] > 0
+        # perspective project
+        uv_h = cam_pts[:,:3] @ self.K.T       # (N,3)
+        uv = uv_h[:, :2] / uv_h[:, 2:3]
+        return uv, valid
 
-    def get_point_labels(self, points_3d, mask_2d, default_label=255):
+    def get_point_labels(self,
+                         points: np.ndarray,
+                         mask: np.ndarray   # H×W array with class IDs or 0/1
+                         ) -> np.ndarray:
         """
-        Assigns a 2D mask label to each 3D point by projection.
-        Args:
-            points_3d: (N, 3) numpy array
-            mask_2d: (H, W) numpy array of int labels
-            default_label: label to assign if point projects outside image
-        Returns:
-            labels: (N,) numpy array of int labels
+        For each point, project to image, sample the mask, and return per-point labels.
+        Invalid or out-of-bounds points get label = -1.
         """
-        points_2d = self.project_points(points_3d)
-        H, W = mask_2d.shape if self.image_shape is None else self.image_shape
-        labels = np.full(points_3d.shape[0], default_label, dtype=mask_2d.dtype)
-        for i, (u, v) in enumerate(points_2d):
-            u_int, v_int = int(round(u)), int(round(v))
-            if 0 <= v_int < H and 0 <= u_int < W:
-                labels[i] = mask_2d[v_int, u_int]
+        uv, valid = self.project_points(points)
+        labels = -1 * np.ones(points.shape[0], dtype=np.int32)
+
+        # round to nearest pixel
+        u = np.round(uv[:,0]).astype(int)
+        v = np.round(uv[:,1]).astype(int)
+
+        # check bounds & depth
+        in_bounds = (u >= 0) & (u < self.W) & (v >= 0) & (v < self.H) & valid
+        labels[in_bounds] = mask[v[in_bounds], u[in_bounds]]
+
         return labels
+
+
+def project_points_to_dino_patches(uv, valid, img_shape, dino_shape):
+    """
+    Map pixel coordinates (uv) in image space (HxW) to DINO patch grid (Hf x Wf).
+    Returns patch indices for valid points, else -1.
+    """
+    N = uv.shape[0]
+    H, W = img_shape
+    Hf, Wf = dino_shape
+
+    patch_u = np.clip((uv[:,0] / W * Wf).astype(int), 0, Wf-1)
+    patch_v = np.clip((uv[:,1] / H * Hf).astype(int), 0, Hf-1)
+    patch_idx = patch_v * Wf + patch_u
+
+    patch_idx[~valid] = -1   # set to -1 for invalid projections
+
+    return patch_idx  # shape (N,)

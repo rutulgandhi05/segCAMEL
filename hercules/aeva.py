@@ -81,34 +81,43 @@ def load_aeva_bin(bin_path, return_all_fields=False):
     bin_path = Path(bin_path)
     if not bin_path.exists():
         raise FileNotFoundError(f"File not found: {bin_path}")
+    
     try:
         stem_int = int(bin_path.stem)
     except Exception:
         stem_int = 0
+    
     if stem_int > INTENSITY_THRESHOLD:
         point_format = '<fffffiBf'  # with intensity
         field_names = ['x', 'y', 'z', 'reflectivity', 'velocity', 'time_offset_ns', 'line_index', 'intensity']
     else:
         point_format = '<fffffiB'   # no intensity
         field_names = ['x', 'y', 'z', 'reflectivity', 'velocity', 'time_offset_ns', 'line_index']
+    
     point_size = struct.calcsize(point_format)
+
     with open(bin_path, 'rb') as f:
         raw_data = f.read()
+
     total_len = len(raw_data)
     remainder = total_len % point_size
+
     if remainder != 0:
         raw_data = raw_data[:total_len - remainder]
     n_points = len(raw_data) // point_size
     all_fields = {k: [] for k in field_names}
     unpack = struct.Struct(point_format).unpack_from
+
     for i in range(n_points):
         offset = i * point_size
         vals = unpack(raw_data, offset)
         for k, v in zip(field_names, vals):
             all_fields[k].append(v)
+            
     # Convert to numpy arrays
     for k in all_fields:
         all_fields[k] = np.array(all_fields[k], dtype=np.float32 if k != 'time_offset_ns' and k != 'line_index' else np.int32)
+    
     xyz = np.stack([all_fields['x'], all_fields['y'], all_fields['z']], axis=1)
     if return_all_fields:
         return xyz, all_fields
