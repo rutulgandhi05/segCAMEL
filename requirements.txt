@@ -15,3 +15,8 @@ scipy
 spconv-cu124
 open3d
 toml
+mcap-protobuf-support
+foxglove-schemas-protobuf
+opencv-python
+open3d
+pandas
