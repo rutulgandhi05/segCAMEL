@@ -172,7 +172,7 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=4)
 
-    sample = train_ds[0][0]
+    sample = train_ds[0]
     in_channels = sample["feat"].shape[1]
     dino_channels = sample["dino_feat"].shape[1]
     model = SegmentationNet(in_channels=in_channels, dino_channels=dino_channels, num_classes=num_classes).to(device)
