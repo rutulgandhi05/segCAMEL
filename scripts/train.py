@@ -154,7 +154,7 @@ def validate(model, loader, criterion, device, epoch=None):
 # ─── Main Training Script ────────────────────────────────────────
 def main():
     logger.info("Starting training...")
-    root_dir = "/mnt/hdd/rutul/thesis_project/segCAMEL/data/processed/Mountain_01_Day"
+    root_dir = Path(__file__).resolve().parent.parent / "data" / "processed" / "Mountain_01_Day"
     logger.info(f"Using dataset root: {root_dir}")
 
     batch_size = 2
