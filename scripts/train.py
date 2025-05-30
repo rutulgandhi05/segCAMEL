@@ -153,7 +153,7 @@ def validate(model, loader, criterion, device, epoch=None):
 
 # ─── Main Training Script ────────────────────────────────────────
 def main():
-    root_dir = "data/processed"
+    root_dir = "data/processed/Mountain_01_Day"
     batch_size = 2
     num_classes = 6           # set this to your number of classes
     num_epochs = 20
