@@ -31,7 +31,7 @@ class MyPointCloudDataset(Dataset):
 
     def __getitem__(self, idx):
         data = torch.load(self.files[idx])
-        return data, data["label"]
+        return data
 
 # ─── Collate Function ────────────────────────────────────────────
 def collate_fn(batch):
