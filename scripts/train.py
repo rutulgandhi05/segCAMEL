@@ -153,15 +153,22 @@ def validate(model, loader, criterion, device, epoch=None):
 
 # ─── Main Training Script ────────────────────────────────────────
 def main():
+    logger.info("Starting training...")
     root_dir = "data/processed/Mountain_01_Day"
+    logger.info(f"Using dataset root: {root_dir}")
+
     batch_size = 2
     num_classes = 6           # set this to your number of classes
     num_epochs = 20
     lr = 1e-3
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
 
     train_ds = MyPointCloudDataset(root_dir, split="train")
+    logger.info(f"Training dataset size: {len(train_ds)}")
     val_ds = MyPointCloudDataset(root_dir, split="val")
+    logger.info(f"Validation dataset size: {len(val_ds)}")
+
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=4)
 
