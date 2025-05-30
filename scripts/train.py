@@ -23,7 +23,8 @@ visualizer = PointCloudVisualizer()
 # ─── Dataset Class ───────────────────────────────────────────────
 class MyPointCloudDataset(Dataset):
     def __init__(self, root_dir, split="train"):
-        self.files = list((root_dir / split).glob("*.pth")).sort()
+        self.base = Path(root_dir) / split
+        self.files = sorted(self.base.glob("*.pth"))
 
     def __len__(self):
         return len(self.files)
@@ -153,7 +154,7 @@ def validate(model, loader, criterion, device, epoch=None):
 # ─── Main Training Script ────────────────────────────────────────
 def main():
     logger.info("Starting training...")
-    root_dir = Path(__file__).resolve().parent.parent / "data" / "processed" / "Mountain_01_Day"
+    root_dir = Path(__file__).resolve().parent.parent / "data" / "hercules" /"processed" / "Mountain_01_Day"
     logger.info(f"Using dataset root: {root_dir}")
 
     batch_size = 2
