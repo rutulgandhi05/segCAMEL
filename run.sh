@@ -1,1 +1,1 @@
-python -m scripts.build_dataset
+python -m scripts.train
