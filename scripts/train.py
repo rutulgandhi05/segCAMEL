@@ -155,9 +155,6 @@ def validate(model, loader, criterion, device, epoch=None):
 def main():
     logger.info("Starting training...")
     root_dir = "data/processed/Mountain_01_Day"
-    if not os.path.exists(root_dir):
-        logger.error(f"Dataset root directory does not exist: {root_dir}")
-        return
     logger.info(f"Using dataset root: {root_dir}")
 
     batch_size = 2
