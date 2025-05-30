@@ -23,8 +23,7 @@ visualizer = PointCloudVisualizer()
 # ─── Dataset Class ───────────────────────────────────────────────
 class MyPointCloudDataset(Dataset):
     def __init__(self, root_dir, split="train"):
-        self.base = Path(root_dir) / split
-        self.files = sorted(self.base.glob("sample_*.pth"))
+        self.files = list((root_dir / split).glob("*.pth")).sort()
 
     def __len__(self):
         return len(self.files)
