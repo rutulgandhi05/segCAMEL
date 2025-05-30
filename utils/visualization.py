@@ -3,11 +3,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-try:
+""" try:
     import open3d as o3d
 except ImportError:
-    o3d = None  # Open3D is optional
+    o3d = None  """ # Open3D is optional
 
+o3d = None
 class PointCloudVisualizer:
     def __init__(self):
         pass
