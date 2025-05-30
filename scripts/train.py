@@ -24,8 +24,7 @@ visualizer = PointCloudVisualizer()
 class MyPointCloudDataset(Dataset):
     def __init__(self, root_dir, split="train"):
         self.base = Path(root_dir) / split
-        self.files = sorted(self.base.glob("*/**.pth"))
-        logger.info(f"Found {len(self.files)} files in {self.base} for split '{split}'")
+        self.files = sorted(self.base.glob("sample_*.pth"))
 
     def __len__(self):
         return len(self.files)
