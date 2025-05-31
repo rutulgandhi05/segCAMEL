@@ -60,7 +60,7 @@ class SegmentationNet(nn.Module):
             in_channels=in_channels,
             dino_channels=dino_channels,      # <-- NEW! for DITR fusion
         )
-        logger.info(f"Backbone output: {self.backbone.dec._modules.dec2}")
+        logger.info(f"Backbone output: {self.backbone.dec._modules.get('dec2')}")
         logger.info(f"Backbone output: {self.backbone.dec._modules['dec2'].up.proj_skip[-1].embed_channels}")
         C_out = self.backbone.dec._modules["dec2"].up.proj_skip[-1].embed_channels
         self.head = nn.Linear(C_out, num_classes)
