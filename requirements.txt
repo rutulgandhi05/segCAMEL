@@ -21,4 +21,4 @@ opencv-python
 open3d
 pandas
 timm
-flash-attn 
+flash-attn  --no-build-isolation
