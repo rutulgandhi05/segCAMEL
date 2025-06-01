@@ -19,8 +19,8 @@ try:
 except ImportError:
     flash_attn = None
 
-from point_prompt_training.prompt_driven_normalization import PDNorm
-from builder import MODELS
+from models.PTv3.point_prompt_training.prompt_driven_normalization import PDNorm
+from models.PTv3.builder import MODELS
 from models.PTv3.utils.misc import offset2bincount
 from models.PTv3.utils.structure import Point
 from models.PTv3.modules import PointModule, PointSequential
