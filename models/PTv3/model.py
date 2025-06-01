@@ -426,6 +426,7 @@ class SerializedPooling(PointModule):
             serialized_inverse=inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
+            pooling_head_indices=head_indices
         )
 
         if "condition" in point.keys():
@@ -486,14 +487,19 @@ class SerializedUnpooling(PointModule):
         """
         assert "pooling_parent" in point.keys()
         assert "pooling_inverse" in point.keys()
+        assert "pooling_head_indices" in point.keys()
+
         parent = point.pop("pooling_parent")
         inverse = point.pop("pooling_inverse")
+        head_indices = point.pop("pooling_head_indices")
+
         point = self.proj(point)           # project up from lower resolution
         parent = self.proj_skip(parent)    # project skip‐connection from encoder
 
         # === Fuse DINO features at this decoder stage ===
         if dino_feat is not None:
-            parent.feat = parent.feat + self.proj_dino(dino_feat)
+            dino_parent = dino_feat[head_indices]  # (num_parent, dino_channels)
+            parent.feat = parent.feat + self.proj_dino(dino_parent)
 
         parent.feat = parent.feat + point.feat[inverse]
 
