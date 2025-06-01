@@ -728,9 +728,23 @@ class PointTransformerV3(PointModule):
 
         point = self.embedding(point)
         point = self.enc(point)
-        if not self.cls_mode:
+
+        """ if not self.cls_mode:
             # Pass dino_feat into each decoder stage for fusion
             for dec_stage in self.dec._modules.values():
                 point = dec_stage(point, dino_feat=data_dict.get("dino_feat", None))
-        # else: (classification mode, omitted)
+        # else: (classification mode, omitted) """
+
+        if not self.cls_mode:
+            # Manually iterate through each decoder stage's sub‐modules:
+            for dec_stage in self.dec._modules.values():
+                # dec_stage is a PointSequential containing:
+                #   [ SerializedUnpooling(...), Block(...), Block(...), ... ]
+                for module in dec_stage._modules.values():
+                    if isinstance(module, SerializedUnpooling):
+                        # Pass dino_feat to the unpooling layer
+                        point = module(point, dino_feat=data_dict.get("dino_feat", None))
+                    else:
+                        # Regular Block or other PointSequential: no dino_feat
+                        point = module(point)
         return point
