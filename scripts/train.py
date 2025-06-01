@@ -143,7 +143,6 @@ class SegmentationNet(nn.Module):
         # Backbone: PointTransformerV3 expects `in_channels` and `dino_channels`.
         self.backbone = PointTransformerV3(
             in_channels=in_channels,
-            dino_channels=dino_channels,
             cls_mode=False,
         )
 

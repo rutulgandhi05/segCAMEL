@@ -1,8 +1,10 @@
 """
-Point Transformer - V3 Mode1
+Point Transformer - V3 Mode1 (Modified for Decoder‐Level DINO Fusion)
 
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
+This variant includes `dino_channels` to enable injecting 2D DINO features
+into each `SerializedUnpooling` block of the decoder.
 """
 
 from functools import partial
@@ -355,7 +357,6 @@ class SerializedPooling(PointModule):
         self.out_channels = out_channels
 
         assert stride == 2 ** (math.ceil(stride) - 1).bit_length()  # 2, 4, 8
-        # TODO: add support to grid pool (any stride)
         self.stride = stride
         assert reduce in ["sum", "mean", "min", "max"]
         self.reduce = reduce
@@ -388,9 +389,9 @@ class SerializedPooling(PointModule):
             return_inverse=True,
             return_counts=True,
         )
-        # indices of point sorted by cluster, for torch_scatter.segment_csr
+        # indices of points sorted by cluster, for torch_scatter.segment_csr
         _, indices = torch.sort(cluster)
-        # index pointer for sorted point, for torch_scatter.segment_csr
+        # index pointer for sorted points, for torch_scatter.segment_csr
         idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         # head_indices of each cluster, for reduce attr e.g. code, batch
         head_indices = indices[idx_ptr[:-1]]
@@ -450,31 +451,50 @@ class SerializedUnpooling(PointModule):
         in_channels,
         skip_channels,
         out_channels,
+        dino_channels,
         norm_layer=None,
         act_layer=None,
         traceable=False,  # record parent and cluster
     ):
+        """
+        dino_channels: dimension of the 2D DINO features to fuse
+        """
         super().__init__()
         self.proj = PointSequential(nn.Linear(in_channels, out_channels))
         self.proj_skip = PointSequential(nn.Linear(skip_channels, out_channels))
+        # === Add projection for DINO features ===
+        self.proj_dino = PointSequential(nn.Linear(dino_channels, out_channels))
 
         if norm_layer is not None:
             self.proj.add(norm_layer(out_channels))
             self.proj_skip.add(norm_layer(out_channels))
+            self.proj_dino.add(norm_layer(out_channels))
 
         if act_layer is not None:
             self.proj.add(act_layer())
             self.proj_skip.add(act_layer())
+            self.proj_dino.add(act_layer())
 
         self.traceable = traceable
 
-    def forward(self, point):
+    def forward(self, point: Point, dino_feat=None):
+        """
+        Args:
+            point: a Point object containing:
+                - "pooling_parent" and "pooling_inverse"
+            dino_feat: Tensor of shape (ΣN, dino_channels)
+        """
         assert "pooling_parent" in point.keys()
         assert "pooling_inverse" in point.keys()
         parent = point.pop("pooling_parent")
         inverse = point.pop("pooling_inverse")
-        point = self.proj(point)
-        parent = self.proj_skip(parent)
+        point = self.proj(point)           # project up from lower resolution
+        parent = self.proj_skip(parent)    # project skip‐connection from encoder
+
+        # === Fuse DINO features at this decoder stage ===
+        if dino_feat is not None:
+            parent.feat = parent.feat + self.proj_dino(dino_feat)
+
         parent.feat = parent.feat + point.feat[inverse]
 
         if self.traceable:
@@ -494,7 +514,6 @@ class Embedding(PointModule):
         self.in_channels = in_channels
         self.embed_channels = embed_channels
 
-        # TODO: check remove spconv
         self.stem = PointSequential(
             conv=spconv.SubMConv3d(
                 in_channels,
@@ -520,6 +539,7 @@ class PointTransformerV3(PointModule):
     def __init__(
         self,
         in_channels=6,
+        dino_channels=None,
         order=("z", "z-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -550,11 +570,15 @@ class PointTransformerV3(PointModule):
         pdnorm_affine=True,
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ):
+        """
+        dino_channels: your 2D DINO feature dimension (e.g., 384)
+        """
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
         self.cls_mode = cls_mode
         self.shuffle_orders = shuffle_orders
+        self.dino_channels = dino_channels  # store for decoder fusion
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
@@ -647,7 +671,7 @@ class PointTransformerV3(PointModule):
             if len(enc) != 0:
                 self.enc.add(module=enc, name=f"enc{s}")
 
-        # decoder
+        # decoder (with DINO fusion)
         if not self.cls_mode:
             dec_drop_path = [
                 x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
@@ -665,6 +689,7 @@ class PointTransformerV3(PointModule):
                         in_channels=dec_channels[s + 1],
                         skip_channels=enc_channels[s],
                         out_channels=dec_channels[s],
+                        dino_channels=self.dino_channels,
                         norm_layer=bn_layer,
                         act_layer=act_layer,
                     ),
@@ -704,11 +729,8 @@ class PointTransformerV3(PointModule):
         point = self.embedding(point)
         point = self.enc(point)
         if not self.cls_mode:
-            point = self.dec(point)
-        # else:
-        #     point.feat = torch_scatter.segment_csr(
-        #         src=point.feat,
-        #         indptr=nn.functional.pad(point.offset, (1, 0)),
-        #         reduce="mean",
-        #     )
+            # Pass dino_feat into each decoder stage for fusion
+            for dec_stage in self.dec._modules.values():
+                point = dec_stage(point, dino_feat=data_dict.get("dino_feat", None))
+        # else: (classification mode, omitted)
         return point
