@@ -1,10 +1,10 @@
 
---find-links https://download.pytorch.org/whl/cu126
-torch==2.6.0 
-torchvision==0.21.0 
-torchaudio==2.6.0 
+--find-links https://download.pytorch.org/whl/cu124
+torch==2.5.0 
+torchvision==0.20.0 
+torchaudio==2.5.0 
 
---find-links https://data.pyg.org/whl/torch-2.6.0+cu126.html
+--find-links https://data.pyg.org/whl/torch-2.5.0+cu124.html
 torch_scatter 
 torch_sparse 
 torch_cluster 
@@ -12,7 +12,7 @@ torch_geometric
 
 addict 
 scipy 
-spconv-cu126
+spconv-cu124
 open3d
 toml
 mcap-protobuf-support
@@ -21,4 +21,4 @@ opencv-python
 open3d
 pandas
 timm
-#flash-attn
+#flash-attn 
