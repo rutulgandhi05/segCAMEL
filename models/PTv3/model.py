@@ -62,7 +62,7 @@ class SerializedAttention(PointModule):
         proj_drop=0.0,
         order_index=0,
         enable_rpe=False,
-        enable_flash=True,
+        enable_flash=False,
         upcast_attention=True,
         upcast_softmax=True,
     ):
@@ -268,7 +268,7 @@ class Block(PointModule):
         order_index=0,
         cpe_indice_key=None,
         enable_rpe=False,
-        enable_flash=True,
+        enable_flash=False,
         upcast_attention=True,
         upcast_softmax=True,
     ):
@@ -559,7 +559,7 @@ class PointTransformerV3(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enable_rpe=False,
-        enable_flash=True,
+        enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
         cls_mode=False,
