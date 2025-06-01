@@ -144,6 +144,7 @@ class SegmentationNet(nn.Module):
         self.backbone = PointTransformerV3(
             in_channels=in_channels,
             dino_channels=dino_channels,
+            cls_mode=False,
         )
 
         # Build a classification head (unused during unsupervised training).
