@@ -365,7 +365,7 @@ def main():
                 .parent.parent / "data" / "hercules" / "processed" / "Mountain_01_Day")
     logger.info(f"Dataset root: {root_dir}")
 
-    batch_size  = 2
+    batch_size  = 1
     num_classes = 6      # retained for downstream fine-tuning; not used during distillation
     num_epochs  = 20
     lr          = 1e-3
