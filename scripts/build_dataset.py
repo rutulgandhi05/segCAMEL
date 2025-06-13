@@ -9,6 +9,7 @@ import random
 from scripts.dataset import load_hercules_dataset_folder
 from scripts.project_2d_to_3d import LabelProjector, project_points_to_dino_patches
 from scripts.twod_feature_extractor import DINOv2FeatureExtractor
+from scripts.mask_generator import MaskGenerator
 
 RAW_FOLDER   = Path("data/hercules/Mountain_01_Day/")
 OUT_FOLDER   = Path("data/hercules/processed/Mountain_01_Day/")
@@ -41,6 +42,7 @@ projector = LabelProjector(
     image_shape=tuple(Image.open(left_images[0]).convert("L").size[::-1])
 )
 extractor = DINOv2FeatureExtractor(model_name="vit_small_patch14_dinov2.lvd142m", device="cuda")
+mask_generator = MaskGenerator(num_clusters=50)
 
 num_scans = len(point_clouds)
 split_idx = int((1.0 - VAL_SPLIT) * num_scans)
@@ -67,15 +69,19 @@ for idx, ((xyz, fields), lidar_path) in enumerate(zip(point_clouds, data["point_
     N = xyz.shape[0]
     dino_feat_dim = None
     point_dino_feat = None
+    point_labels = None
 
     all_img_dino_feats = []
     all_img_valid_mask = []
+    all_img_labels = []
 
     for cam_idx in img_idxs:
         this_img_path = left_images[cam_idx]
         dino_dense = extractor.extract_features(Image.open(this_img_path).convert("RGB"))
         Hf = Wf = int(np.sqrt(dino_dense.shape[0]))
         dino_feat_dim = dino_dense.shape[1]
+        mask = mask_generator.generate(dino_dense, (Hf, Wf))
+        mask_flat = mask.reshape(-1)
 
         # Project points into image (in resized 518x518 grid!)
         uv, valid = projector.project_points(xyz)
@@ -84,19 +90,24 @@ for idx, ((xyz, fields), lidar_path) in enumerate(zip(point_clouds, data["point_
         patch_idx = project_points_to_dino_patches(uv, valid, img_shape, dino_shape)
 
         this_img_feats = np.zeros((N, dino_feat_dim), dtype=np.float32)
-        # Assign features for valid points
+        this_img_labels = -1 * np.ones(N, dtype=np.int32)
+        # Assign features and labels for valid points
         valid_mask = patch_idx >= 0
         this_img_feats[valid_mask] = dino_dense[patch_idx[valid_mask]]
+        this_img_labels[valid_mask] = mask_flat[patch_idx[valid_mask]]
         all_img_dino_feats.append(this_img_feats)
         all_img_valid_mask.append(valid_mask)
+        all_img_labels.append(this_img_labels)
 
     # For each point: randomly choose a visible image (if multiple)
     point_dino_feat = np.zeros((N, dino_feat_dim), dtype=np.float32)
+    point_labels = -1 * np.ones(N, dtype=np.int32)
     for i in range(N):
         visible_imgs = [j for j, mask in enumerate(all_img_valid_mask) if mask[i]]
         if visible_imgs:
             chosen = random.choice(visible_imgs)
             point_dino_feat[i] = all_img_dino_feats[chosen][i]
+            point_labels[i] = all_img_labels[chosen][i]
         else:
             pass  # leave as zeros
 
@@ -105,6 +116,7 @@ for idx, ((xyz, fields), lidar_path) in enumerate(zip(point_clouds, data["point_
         "coord": torch.from_numpy(xyz).float(),
         "feat": torch.from_numpy(original_features).float(),
         "dino_feat": torch.from_numpy(point_dino_feat).float(),
+        "pseudo_label": torch.from_numpy(point_labels).long(),
         "grid_size": GRID_SIZE
     }
     out_dir = OUT_TRAIN if idx < split_idx else OUT_VAL
