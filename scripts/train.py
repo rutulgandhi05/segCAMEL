@@ -268,7 +268,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch=None):
     return total_loss / total_pts
 
 
-def validate(model, loader, device, epoch=None):
+def validate(model, loader, device, epoch=None, save_dir=None):
     """
     Run an unsupervised distillation validation pass (no labels) to monitor loss.
 
@@ -282,6 +282,7 @@ def validate(model, loader, device, epoch=None):
         loader (DataLoader): Validation DataLoader yielding (data_dict, None).
         device (torch.device): Device to run inference on.
         epoch (int, optional): Current epoch number (for logging).
+        save_dir (str or Path, optional): Directory to write visualizations.
 
     Returns:
         float: The average distillation loss over all points in the validation set.
@@ -319,11 +320,14 @@ def validate(model, loader, device, epoch=None):
                 rgb_dino = dino_feats_np[:, :3]
                 rgb_dino = (rgb_dino - rgb_dino.min(0)) / (rgb_dino.max(0) - rgb_dino.min(0) + 1e-6)
 
+                save_dino = f"epoch{epoch}_val_dino_rgb.png"
+                if save_dir is not None:
+                    save_dino = str(Path(save_dir) / save_dino)
                 visualizer.show_rgb(
                     coords_np,
                     rgb_dino,
                     title="DINO RGB",
-                    save_path=f"epoch{epoch}_val_dino_rgb.png",
+                    save_path=save_dino,
                     use_open3d=False  # ensures no interactive window, only file saved
                 )
 
@@ -332,11 +336,14 @@ def validate(model, loader, device, epoch=None):
                 rgb_pred = pred_feats_np[:, :3]
                 rgb_pred = (rgb_pred - rgb_pred.min(0)) / (rgb_pred.max(0) - rgb_pred.min(0) + 1e-6)
 
+                save_pred = f"epoch{epoch}_val_pred_rgb.png"
+                if save_dir is not None:
+                    save_pred = str(Path(save_dir) / save_pred)
                 visualizer.show_rgb(
                     coords_np,
                     rgb_pred,
                     title="Pred RGB",
-                    save_path=f"epoch{epoch}_val_pred_rgb.png",
+                    save_path=save_pred,
                     use_open3d=False  # ensures no interactive window, only file saved
                 )
 
@@ -417,13 +424,13 @@ def main():
         logger.info(f"[Epoch {epoch}] Train Distill Loss: {train_loss:.6f}")
 
         logger.info(f"Epoch {epoch}/{num_epochs} — Validation")
-        val_loss = validate(model, val_loader, device, epoch)
+        val_loss = validate(model, val_loader, device, epoch, save_dir=root_dir)
         logger.info(f"[Epoch {epoch}] Val Distill Loss: {val_loss:.6f}")
 
         # Save the best-performing distillation model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), "best_unsupervised_model.pth")
+            torch.save(model.state_dict(), Path(root_dir) / "best_unsupervised_model.pth")
             logger.info(
                 f"Saved best model at epoch {epoch} (ValDistillLoss={val_loss:.6f})"
             )
