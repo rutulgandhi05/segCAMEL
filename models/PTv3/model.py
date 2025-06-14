@@ -499,8 +499,8 @@ class SerializedUnpooling(PointModule):
         # === Fuse DINO features at this decoder stage ===
         if dino_feat is not None:
             dino_parent = dino_feat[head_indices]  # (num_parent, dino_channels)
-            parent.feat = parent.feat + self.proj_dino(dino_parent)
-
+            parent.feat[head_indices] = parent.feat[head_indices] + self.proj_dino(dino_parent)
+            
         parent.feat = parent.feat + point.feat[inverse]
 
         if self.traceable:
