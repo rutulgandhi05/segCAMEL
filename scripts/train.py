@@ -319,10 +319,11 @@ def validate(model, loader, device, epoch=None):
                 rgb_dino = dino_feats_np[:, :3]
                 rgb_dino = (rgb_dino - rgb_dino.min(0)) / (rgb_dino.max(0) - rgb_dino.min(0) + 1e-6)
 
-                visualizer.show_point_cloud(
+                visualizer.show_rgb(
                     coords_np,
-                    colors=rgb_dino,
-                    save_prefix=f"epoch{epoch}_val_dino_rgb",
+                    rgb_dino,
+                    title="DINO RGB",
+                    save_path=f"epoch{epoch}_val_dino_rgb.png",
                     use_open3d=False  # ensures no interactive window, only file saved
                 )
 
@@ -331,10 +332,11 @@ def validate(model, loader, device, epoch=None):
                 rgb_pred = pred_feats_np[:, :3]
                 rgb_pred = (rgb_pred - rgb_pred.min(0)) / (rgb_pred.max(0) - rgb_pred.min(0) + 1e-6)
 
-                visualizer.show_point_cloud(
+                visualizer.show_rgb(
                     coords_np,
-                    colors=rgb_pred,
-                    save_prefix=f"epoch{epoch}_val_pred_rgb",
+                    rgb_pred,
+                    title="Pred RGB",
+                    save_path=f"epoch{epoch}_val_pred_rgb.png",
                     use_open3d=False  # ensures no interactive window, only file saved
                 )
 
