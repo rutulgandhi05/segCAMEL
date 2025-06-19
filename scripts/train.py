@@ -371,7 +371,7 @@ def main():
 
     # Adjust the path to where your processed .pth files live:
     root_dir = (Path(__file__).resolve()
-                .parent.parent / "data" / "hercules" / "processed" / "Mountain_01_Day")
+                .parent.parent / "data" / "hercules" / "processed")
     logger.info(f"Dataset root: {root_dir}")
 
     batch_size  = 1

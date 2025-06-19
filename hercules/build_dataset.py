@@ -1,37 +1,65 @@
 # scripts/build_dataset.py
 
-from pathlib import Path
 import torch
-import numpy as np
-from PIL import Image
 import random
+import logging
+import numpy as np
 
+
+from PIL import Image
+from pathlib import Path
 from scripts.dataset import load_hercules_dataset_folder
 from scripts.project_2d_to_3d import LabelProjector, project_points_to_dino_patches
 from scripts.twod_feature_extractor import DINOv2FeatureExtractor
 
-RAW_FOLDER   = Path("data/hercules/Mountain_01_Day/")
-OUT_FOLDER   = Path("data/hercules/processed/Mountain_01_Day/")
-OUT_TRAIN    = OUT_FOLDER / "train"
-OUT_VAL      = OUT_FOLDER / "val"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+IGNORE_FOLDERS = ["Mountain_01_Day", "Parking_lot_02_Day"]
+DATA_ROOT_FOLDER  = Path("data/hercules/")
+RAW_FOLDERS   = iter([p for p in DATA_ROOT_FOLDER.iterdir() if p.is_dir() and p.name in IGNORE_FOLDERS])
+RAW_FOLDER    = next(RAW_FOLDERS, None)
 GRID_SIZE    = 0.05
 VAL_SPLIT    = 0.2
-TIME_THRESH  = 0.05  # 50 ms
+TIME_THRESH  = 0.05 
 
+OUT_FOLDER   = DATA_ROOT_FOLDER / "processed"
+OUT_FOLDER.mkdir(parents=True, exist_ok=True)
+OUT_TRAIN    = OUT_FOLDER / "train"
 OUT_TRAIN.mkdir(parents=True, exist_ok=True)
+OUT_VAL      = OUT_FOLDER / "val"
 OUT_VAL.mkdir(parents=True, exist_ok=True)
 
-# Load raw data
-data = load_hercules_dataset_folder(RAW_FOLDER, return_all_fields=True)
-point_clouds  = data["point_clouds"]                # list of (xyz, fields) tuples
-left_images   = data["stereo_left_images"]          # list of Path
-intrinsic     = data["stereo_left_intrinsics"]      # (3×3)
-extrinsic     = data["lidar_to_stereo_left_extrinsic"]  # (4×4)
-
-print(f"Loaded {len(point_clouds)} point clouds and {len(left_images)} left images.")
+def get_closest_images(lidar_ts, camera_ts, thresh):
+    delta = np.abs(camera_ts - lidar_ts)
+    min_delta = np.min(delta)
+    close_idxs = np.where(delta == min_delta)[0]
+    if min_delta > thresh:
+        return []
+    return close_idxs.tolist()
 
 def extract_timestamp(p: Path):
     return float(p.stem) * 1e-9
+
+
+point_clouds = []
+left_images = []
+intrinsic = None
+extrinsic = None
+
+while RAW_FOLDER and RAW_FOLDER.is_dir():
+    
+    logging.info(f"Processing folder: {RAW_FOLDER}")
+
+    data = load_hercules_dataset_folder(RAW_FOLDER, return_all_fields=True)
+    if data is None:
+        logging.error(f"Failed to load data from {RAW_FOLDER}. Check the folder structure and files.")
+
+    point_clouds.extend(data["point_clouds"])               # list of (xyz, fields) tuples
+    left_images.extend(data["stereo_left_images"])          # list of Path
+    intrinsic     = data["stereo_left_intrinsics"] if intrinsic != data["stereo_left_intrinsics"] else intrinsic    # (3×3)
+    extrinsic     = data["lidar_to_stereo_left_extrinsic"] if extrinsic != data["lidar_to_stereo_left_extrinsic"] else extrinsic  # (4×4)
+
+logging.info(f"Loaded {len(point_clouds)} point clouds and {len(left_images)} left images.")
 
 camera_timestamps = np.array([extract_timestamp(p) for p in left_images])
 
@@ -45,13 +73,6 @@ extractor = DINOv2FeatureExtractor(model_name="vit_small_patch14_dinov2.lvd142m"
 num_scans = len(point_clouds)
 split_idx = int((1.0 - VAL_SPLIT) * num_scans)
 
-def get_closest_images(lidar_ts, camera_ts, thresh):
-    delta = np.abs(camera_ts - lidar_ts)
-    min_delta = np.min(delta)
-    close_idxs = np.where(delta == min_delta)[0]
-    if min_delta > thresh:
-        return []
-    return close_idxs.tolist()
 
 for idx, ((xyz, fields), lidar_path) in enumerate(zip(point_clouds, data["point_cloud_paths"])):
     intensity = fields.get('intensity', np.zeros_like(fields['x']))
@@ -61,7 +82,7 @@ for idx, ((xyz, fields), lidar_path) in enumerate(zip(point_clouds, data["point_
     lidar_ts = extract_timestamp(lidar_path)
     img_idxs = get_closest_images(lidar_ts, camera_timestamps, TIME_THRESH)
     if not img_idxs:
-        print(f"Warning: No camera image found within {TIME_THRESH}s for LiDAR scan {lidar_path}. Skipping.")
+        logging.warning(f"No camera image found within {TIME_THRESH}s for LiDAR scan {lidar_path}. Skipping.")
         continue
 
     N = xyz.shape[0]
