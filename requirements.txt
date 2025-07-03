@@ -22,4 +22,4 @@ pandas
 timm
 #flash-attn 
 dinotool
-dinov2
+dinov2 
