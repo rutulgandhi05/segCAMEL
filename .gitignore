@@ -178,7 +178,9 @@ hercules/dataset_download/token.pickle
 hercules/dataset_download/hercules.json
 hercules/dataset_download/temp.toml
 
+test*
 test.jpg
+test.png
 test.py
 commands.txt
 run_output.txt

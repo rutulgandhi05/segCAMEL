@@ -3,6 +3,8 @@ import toml
 from tqdm import tqdm
 from pathlib import Path   
 from mcap_protobuf.writer import Writer
+from mcap_protobuf.reader import read_protobuf_messages
+from mcap.reader import make_reader
 from datetime import timedelta, datetime
 from foxglove_schemas_protobuf.PointCloud_pb2 import PointCloud as PB_PointCloud
 
@@ -42,6 +44,22 @@ def read_txt_file(file_path: Path):
     except Exception as e:
         print(f"Error reading text file: {e}")
         return None
+    
+    
+def read_mcap_file(file_path: Path, topics: list[str] = None):
+    """
+    Reads an MCAP file and returns its content.
+    
+    Args:
+        file_path (Path): Path to the MCAP file.
+        topics (list[str]): List of topics to filter messages. If None, all messages are returned.
+        
+    Returns:
+        list: List of messages in the MCAP file.
+    """
+    
+    msgs = list(read_protobuf_messages(file_path, topics=topics, log_time_order=True))
+    return msgs
     
 
 def write_to_mcap(foxglove_msgs: list[tuple[PB_PointCloud, int]], output_mcap_path: Path, topic="/hercules/"):

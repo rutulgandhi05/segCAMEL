@@ -2,6 +2,9 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
+import subprocess
+
 
 try:
     import open3d as o3d
@@ -122,6 +125,47 @@ class PointCloudVisualizer:
         else:
             self.plot_pointcloud(coords, rgb, title, save_path=save_path)
 
+
+def create_video_from_frames(
+    tmpdir: str, output_path: str, framerate: float = 30
+) -> None:
+    """Create video from frame images using ffmpeg."""
+    output_path = Path(output_path)
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(framerate),
+                "-i",
+                f"{tmpdir}\\%05d.jpg",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(output_path),
+            ],
+            check=True,
+        )
+
+        print(f"Saved visualization to {output_path}")
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "ffmpeg is not installed. Please install ffmpeg to create video outputs."
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"Failed to create video from frames: {e}. "
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"An unexpected error occurred while creating video: {e}"
+        ) from e
+    
+
 # --------------- Example Usage ---------------
 
 if __name__ == "__main__":
@@ -144,3 +188,4 @@ if __name__ == "__main__":
     # preds = model(data_dict).argmax(dim=1).cpu().numpy()
     # dino_feat = data_dict["dino_feat"].cpu().numpy()
     # visualizer.show_gt_pred(coords, labels, preds, dino_feat)
+
