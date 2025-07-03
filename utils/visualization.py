@@ -141,7 +141,7 @@ def create_video_from_frames(
                 "-framerate",
                 str(framerate),
                 "-i",
-                f"{tmpdir}\\%05d.jpg",
+                f"{tmpdir}/%05d.jpg",
                 "-c:v",
                 "libx264",
                 "-pix_fmt",
