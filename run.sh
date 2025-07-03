@@ -1,1 +1,1 @@
-python -m scripts.train
+python -m scripts.feature_extractor
