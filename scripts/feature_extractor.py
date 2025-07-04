@@ -150,7 +150,8 @@ if __name__ == "__main__":
 
     extractor = Extractor()
     output_video_path = Path("data/scantinel/feature_vids")
-    output_video_path = output_video_path / f.parent.parent.stem / f.parent.stem
+    output_video_path = output_video_path / f.parent.parent.stem
+    video_image_path = output_video_path / f.stem
     output_video_path.mkdir(parents=True, exist_ok=True)
     output_video_path = output_video_path / f"{f.stem}.mp4"
-    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=5)
+    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, out_dir=video_image_path)

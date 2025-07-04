@@ -142,7 +142,7 @@ def create_video_from_frames(
         height, width, layers = frame.shape
 
         # Video writer to create .avi file
-        video = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*'DIVX'), 1, (width, height))
+        video = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*'DIVX'), framerate, (width, height))
         # Appending images to video
         for image in images:
             video.write(cv2.imread(str(image)))
