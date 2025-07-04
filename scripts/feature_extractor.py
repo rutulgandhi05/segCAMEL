@@ -90,7 +90,7 @@ class Extractor:
             out_img.show()
         return out_img
     
-    def visualize_dino_features_video(self, images: list[Image.Image], outfile_path: Path, framerate: int = 5):
+    def visualize_dino_features_video(self, images: list[Image.Image], outfile_path: Path, framerate: int = 5, out_dir: Path = None):
         """
         Creates a video from the extracted feature images.
         
@@ -98,6 +98,7 @@ class Extractor:
             feature_images (list): List of (feature,image) to be included in the video.
             outfile_path (Path): Path where the video will be saved, ending in .mp4.
             framerate (int): Frame rate for the video. Default is 5.
+            out_dir (Path): Directory where the temporary frames will be stored. If None, uses the parent directory of outfile_path.
             
         Returns:
             None: Saves the video to the specified outfile_path.
