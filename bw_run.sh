@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J thechosenone
+#SBATCH -J SegCAMEL
 #SBATCH -o output.txt
 #SBATCH -e error.txt
 #SBATCH -c 8
@@ -13,8 +13,7 @@
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
-
-
+source venv/bin/activate
 python -m scripts.feature_extractor
 
 
