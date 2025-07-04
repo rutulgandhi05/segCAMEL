@@ -134,7 +134,14 @@ def create_video_from_frames(
     if not output_path.parent.exists():
         output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(
+        import ffmpeg
+        (
+            ffmpeg
+            .input('{tmpdir}/*.jpg', pattern_type='glob', framerate=25)
+            .output(str(output_path))
+            .run()
+        )
+        """ subprocess.run(
             [
                 "ffmpeg",
                 "-y",
@@ -149,7 +156,7 @@ def create_video_from_frames(
                 str(output_path),
             ],
             check=True,
-        )
+        ) """
 
         print(f"Saved visualization to {output_path}")
     except FileNotFoundError:
