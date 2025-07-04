@@ -134,38 +134,28 @@ def create_video_from_frames(
     if not output_path.parent.exists():
         output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        import ffmpeg
-        (
-            ffmpeg
-            .input('{tmpdir}/*.jpg', pattern_type='glob', framerate=25)
-            .output(str(output_path))
-            .run()
-        )
-        """ subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(framerate),
-                "-i",
-                f"{tmpdir}/%05d.jpg",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                str(output_path),
-            ],
-            check=True,
-        ) """
+        
+        import cv2
+
+        images = sorted(Path(tmpdir).glob("*.jpg"))
+        frame = cv2.imread(str(images[0]))
+        height, width, layers = frame.shape
+
+        # Video writer to create .avi file
+        video = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*'DIVX'), 1, (width, height))
+        # Appending images to video
+        for image in images:
+            video.write(cv2.imread(str(image)))
+
+        # Release the video file
+        video.release()
+        cv2.destroyAllWindows()
+        print("Video generated successfully!")
 
         print(f"Saved visualization to {output_path}")
     except FileNotFoundError:
         raise FileNotFoundError(
             "ffmpeg is not installed. Please install ffmpeg to create video outputs."
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"Failed to create video from frames: {e}. "
         )
     except Exception as e:
         raise RuntimeError(
