@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
     data = read_mcap_file(f, ["/camera"])
    
-    for idx, msg in tqdm(enumerate(data[:10]), desc="Reading images", total=len(data), leave=False, unit="image"):
+    for idx, msg in tqdm(enumerate(data), desc="Reading images", total=len(data), leave=False, unit="image"):
         image = Image.open(io.BytesIO(msg.proto_msg.data)).convert("RGB")
         images.append(image)
 
