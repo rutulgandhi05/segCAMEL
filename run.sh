@@ -1,1 +1,1 @@
-python -m scripts.feature_extractor
+python -m scripts.dataset
