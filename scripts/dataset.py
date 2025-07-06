@@ -145,22 +145,23 @@ def load_scantinel_dataset_folder(dataset_folder: Path):
 
 
 if __name__ == "__main__":
-    hercules_f = Path("data/hercules/Mountain_01_Day")
+    from datetime import datetime
+    hercules_f = Path("data/raw/dataset1")
 
     data = load_hercules_dataset_folder(hercules_f, return_all_fields=True)
 
-    x = [pcl.stem for pcl in data["point_cloud_paths"]]
-    y = [img.stem for img in data["stereo_left_images"]]
+    x = [datetime.fromtimestamp(float(pcl.stem) / 1000) for pcl in data["point_cloud_paths"]][:50]
+    y = [datetime.fromtimestamp(float(img.stem) / 1000) for img in data["stereo_left_images"][:len(x)]]
 
     from matplotlib import pyplot as plt
 
     plt.figure(figsize=(10, 5))
-    plt.plot(x, label="Point Clouds")
-    plt.plot(y, label="Stereo Images")
-    plt.xlabel("Index")
+    plt.plot(x, label="Point Clouds", marker='o', linestyle='None') 
+    plt.plot(y, label="Stereo Images", marker='x', linestyle='None')
+    plt.xlabel("Timestamp")
     plt.ylabel("File Name")
     plt.title("Point Clouds and Stereo Images")
     plt.xticks(rotation=45, ha='right')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(hercules_f / "point_clouds_vs_stereo_images_timestamps.png")
+    plt.show()
