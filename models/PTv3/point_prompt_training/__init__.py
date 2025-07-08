@@ -1,1 +1,0 @@
-from  models.PTv3.point_prompt_training.prompt_driven_normalization import PDNorm

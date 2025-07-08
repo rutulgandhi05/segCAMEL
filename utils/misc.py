@@ -1,3 +1,6 @@
+
+from bisect import bisect_left
+
 def find_closest_stamp(stamps, target_stamp):
     """
     Find the closest timestamp in a list of timestamps to a target timestamp.
@@ -9,4 +12,9 @@ def find_closest_stamp(stamps, target_stamp):
     Returns:
         float: The closest timestamp to the target.
     """
-    return min(stamps, key=lambda x: abs(x - target_stamp))
+
+    i = bisect_left(stamps, target_stamp)
+    #return min(stamps, key=lambda x: abs(x - target_stamp))
+    return min(stamps[max(0, i-1): i+2], key=lambda t: abs(target_stamp - t))
+    
+    

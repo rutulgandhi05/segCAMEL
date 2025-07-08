@@ -28,11 +28,10 @@ class Extractor:
         Extracts features from a single image using the Dinov2 model.
         
         Parameters:
-            image (Image.Image): The image from which features are to be extracted.
+            image (Image.Image): The input image from which features are to be extracted.
             filename (str): The name of the file to be used for feature extraction. Default is "single_file".
-            
         Returns:
-            list: List of messages in the MCAP file.
+            dict: A dictionary containing the filename, extracted features, input size, and feature map size.
         """
         if not image:
             raise Image.UnidentifiedImageError("No image provided for feature extraction.")
@@ -90,7 +89,7 @@ class Extractor:
             out_img.show()
         return out_img
     
-    def visualize_dino_features_video(self, images: list[Image.Image], outfile_path: Path, framerate: int = 5, out_dir: Path = None):
+    def visualize_dino_features_video(self, images: list[Image.Image], outfile_path: Path, framerate: int = 30, save_images=False):
         """
         Creates a video from the extracted feature images.
         
@@ -98,7 +97,7 @@ class Extractor:
             feature_images (list): List of (feature,image) to be included in the video.
             outfile_path (Path): Path where the video will be saved, ending in .mp4.
             framerate (int): Frame rate for the video. Default is 5.
-            out_dir (Path): Directory where the temporary frames will be stored. If None, uses the parent directory of outfile_path.
+            save_images (bool): If True, saves the feature images to a outfile_path.parent/"feature_images". Default is False.
             
         Returns:
             None: Saves the video to the specified outfile_path.
@@ -106,8 +105,13 @@ class Extractor:
         if not images:
             raise ValueError("No images provided for video creation.")
         
-        tempdir = tempfile.TemporaryDirectory(dir=outfile_path.parent)
-        
+        if save_images:
+            dir = outfile_path.parent.parent/ "feature_images" / f"{outfile_path.stem}"
+            dir.mkdir(parents=True, exist_ok=True) if save_images else None
+        else:
+            tempdir = tempfile.TemporaryDirectory(dir=outfile_path.parent.parent / f"{outfile_path.stem}_images") 
+            dir = Path(tempdir.name) 
+
         for idx, image in tqdm(enumerate(images), desc="Extracting features for video:", total=len(images)):
             filename=f"{idx:05d}"
             features = self.extract_dino_features(image=image, filename=filename)
@@ -121,11 +125,11 @@ class Extractor:
                 only_pca=False
             )
             image.close()
-            filename = f"{tempdir.name}/{filename}.jpg"
+            filename = dir / f"{filename}.jpg"
             vis_img.save(filename)
 
         create_video_from_frames(
-            str(tempdir.name),
+            str(dir),
             outfile_path,
             framerate= framerate
         )
@@ -139,7 +143,7 @@ if __name__ == "__main__":
     # Example usage
     images = []
     
-    f = "data/scantinel/250612_RG_dynamic_test_drive/IN002_MUL_SEN_0.2.0.post184+g6da4bed/20250612_144655738000_to_144755688000_CAM.mcap"
+    f = "data/scantinel/250612_RG_dynamic_test_drive/IN002_MUL_SEN_0.2.0.post184+g6da4bed/20250612_144055642000_to_144155593000_CAM.mcap"
     f = Path(f)
 
     data = read_mcap_file(f, ["/camera"])
@@ -149,9 +153,9 @@ if __name__ == "__main__":
         images.append(image)
 
     extractor = Extractor()
+
     output_video_path = Path("data/scantinel/feature_vids")
-    output_video_path = output_video_path / f.parent.parent.stem
-    video_image_path = output_video_path / f.stem
     output_video_path.mkdir(parents=True, exist_ok=True)
     output_video_path = output_video_path / f"{f.stem}.mp4"
-    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, out_dir=video_image_path)
+
+    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, save_images=True)

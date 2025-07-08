@@ -1,4 +1,4 @@
-from models.PTv3.utils.serialization.default import (
+from .default import (
     encode,
     decode,
     z_order_encode,

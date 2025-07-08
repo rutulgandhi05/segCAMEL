@@ -5,7 +5,6 @@ from PIL import Image
 from hercules.aeva import load_aeva_bin
 import tqdm
 from utils.files import read_mcap_file
-from utils.misc import find_closest_stamp
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     """
@@ -135,13 +134,8 @@ def load_scantinel_dataset_folder(dataset_folder: Path):
     # print lidar camera stamps print  none for not available stamps
     lidar_stamps = [msg[1] for msg in lidar_data]
     cam_stamps = [msg[1] for msg in cam_data]
-    print(f"Loaded {len(lidar_stamps)} LiDAR stamps and {len(cam_stamps)} camera stamps.")
-    for i, cam_stamp in enumerate(cam_stamps):
-        lidar_stamp = lidar_stamps[i] if i < len(lidar_stamps) else None
-        if lidar_stamp is not None:
-            print(f"Camera stamp: {cam_stamp}, LiDAR stamp: {lidar_stamp}, difference: {cam_stamp - lidar_stamp} seconds")
-        else:
-            print(f"Camera stamp: {cam_stamp}, No corresponding LiDAR data available.")
+    
+    return lidar_stamps, cam_stamps
 
 
 if __name__ == "__main__":
@@ -150,18 +144,18 @@ if __name__ == "__main__":
 
     data = load_hercules_dataset_folder(hercules_f, return_all_fields=True)
 
-    x = [datetime.fromtimestamp(float(pcl.stem) / 1000) for pcl in data["point_cloud_paths"]][:50]
-    y = [datetime.fromtimestamp(float(img.stem) / 1000) for img in data["stereo_left_images"][:len(x)]]
+    x = [datetime.fromtimestamp(int(pcl.stem)/1000000000) for pcl in data["point_cloud_paths"]][:50]
+    y = [datetime.fromtimestamp(int(img.stem)/1000000000) for img in data["stereo_left_images"][:len(x)]]
 
     from matplotlib import pyplot as plt
 
+    # compare timestamps
     plt.figure(figsize=(10, 5))
-    plt.plot(x, label="Point Clouds", marker='o', linestyle='None') 
-    plt.plot(y, label="Stereo Images", marker='x', linestyle='None')
-    plt.xlabel("Timestamp")
-    plt.ylabel("File Name")
-    plt.title("Point Clouds and Stereo Images")
-    plt.xticks(rotation=45, ha='right')
+    plt.plot(x, np.zeros_like(x), 'ro', label='LiDAR Timestamps')
+    plt.plot(y, np.ones_like(y), 'bo', label='Camera Timestamps')
+    plt.xlabel('Timestamp')
+    plt.yticks([0, 1], ['LiDAR', 'Camera'])
+    plt.title('LiDAR and Camera Timestamps Comparison')
     plt.legend()
-    plt.tight_layout()
+    plt.grid()
     plt.show()
