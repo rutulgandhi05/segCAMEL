@@ -1,1 +1,1 @@
-python -m scripts.dataset
+python -m scripts.preprocess

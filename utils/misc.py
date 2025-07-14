@@ -1,5 +1,6 @@
 
 from bisect import bisect_left
+import logging
 
 def find_closest_stamp(stamps, target_stamp):
     """
@@ -17,4 +18,15 @@ def find_closest_stamp(stamps, target_stamp):
     #return min(stamps, key=lambda x: abs(x - target_stamp))
     return min(stamps[max(0, i-1): i+2], key=lambda t: abs(target_stamp - t))
     
+
+def setup_logger(name="train"):
+
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    return logger
+
     

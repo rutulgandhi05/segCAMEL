@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+from pathlib import Path
+
 try:
     import open3d as o3d
 except ImportError:
@@ -96,3 +98,37 @@ def visualize_lidar_semantics(lidar_xyz, assigned_feats, save_path=None, use_ope
         PointCloudVisualizer.visualize_open3d(lidar_xyz, assigned_feat_rgb)
     else:
         PointCloudVisualizer.plot_pointcloud(lidar_xyz, assigned_feat_rgb, title="LiDAR Points (Assigned DINO Feature RGB)", save_path=save_path)
+
+
+def create_video_from_frames(
+    tmpdir: str, output_path: str, framerate: float = 30
+) -> None:
+    """Create video from frame images using ffmpeg."""
+    output_path = Path(output_path)
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        
+        import cv2
+
+        images = sorted(Path(tmpdir).glob("*.jpg"))
+        frame = cv2.imread(str(images[0]))
+        height, width, layers = frame.shape
+
+        # Video writer to create .avi file
+        video = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*'DIVX'), framerate, (width, height))
+        # Appending images to video
+        for image in images:
+            video.write(cv2.imread(str(image)))
+
+        # Release the video file
+        video.release()
+        cv2.destroyAllWindows()
+        print("Video generated successfully!")
+
+        print(f"Saved visualization to {output_path}")
+    
+    except Exception as e:
+        raise RuntimeError(
+            f"An unexpected error occurred while creating video: {e}"
+        ) from e

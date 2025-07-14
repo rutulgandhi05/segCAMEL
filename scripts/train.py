@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime
-import logging
+from utils.misc import setup_logger
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -8,22 +8,6 @@ from tqdm import tqdm
 
 from models.PTv3.model import PointTransformerV3
 
-def setup_logger(log_dir=Path("logs"), name="train"):
-    log_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"{name}_{timestamp}.log"
-
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    fh = logging.FileHandler(log_file)
-    fh.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s"))
-    logger.addHandler(fh)
-    logger.addHandler(logging.StreamHandler())
-    return logger
 
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
@@ -51,14 +35,14 @@ def train(
     input_mode="vri_dino",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
 ):
     logger = setup_logger()
-    logger.info(f"[train] >> Starting training on device: {device}")
-    logger.info(f"[train] >> Training data: {data_dir}")
-    logger.info(f"[train] >> Input mode: {input_mode}")
+    logger.info(f"Starting training on device: {device}")
+    logger.info(f"Training data: {data_dir}")
+    logger.info(f"Input mode: {input_mode}")
 
     dataset = PointCloudDataset(data_dir)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    logger.info(f"[train] >> Loaded {len(dataset)} preprocessed samples")
+    logger.info(f"Loaded {len(dataset)} preprocessed samples")
 
     # -- Dynamically infer in_channels from first sample --
     sample = dataset[0]
@@ -77,7 +61,7 @@ def train(
     else:
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
-    logger.info(f"[train] >> Using input_dim={input_dim}")
+    logger.info(f"Using input_dim={input_dim}")
     model = PointTransformerV3(in_channels=input_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -125,15 +109,15 @@ def train(
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader)
-        logger.info(f"[train] >> Avg Loss = {avg_loss:.6f}")
+        logger.info(f"Avg Loss = {avg_loss:.6f}")
 
         if avg_loss < best_loss:
             best_loss = avg_loss
             save_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(model.state_dict(), save_path)
-            logger.info(f"[train] >> Best model saved to {save_path} (loss = {avg_loss:.6f})")
+            logger.info(f"Best model saved to {save_path} (loss = {avg_loss:.6f})")
 
-    logger.info("[train] >> Training complete.")
+    logger.info("Training complete.")
 
 if __name__ == "__main__":
     # Set ablation mode here: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'

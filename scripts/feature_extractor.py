@@ -7,6 +7,10 @@ import tempfile
 from utils.visualization import create_video_from_frames
 from tqdm import tqdm
 import torch
+from utils.misc import setup_logger
+
+logger = setup_logger("feature_extractor")
+
 class Extractor:
     def __init__(self, dino_model: str ="dinov2_vits14_reg", clip_model: str ="clip_vit_b32"):
         """
@@ -40,10 +44,10 @@ class Extractor:
         transform = self.transform_factory.get_transform(image.size)
         input_size = transform.resize_size
         feature_map_size = transform.feature_map_size
-        print("[DINOv2] >> Model:", self.dino_model)
-        print(f"[DINOv2] >> Input size: {input_size}")
-        print(f"[DINOv2] >> Patch size: {self.model.patch_size}")
-        print(f"[DINOv2] >> Feature map size: {feature_map_size}")
+        logger.info("Model:", self.dino_model)
+        logger.info(f"Input size: {input_size}")
+        logger.info(f"Patch size: {self.model.patch_size}")
+        logger.info(f"Feature map size: {feature_map_size}")
 
         images_tensor = transform.transform(image).unsqueeze(0)
         features = self.extractor(images_tensor)
