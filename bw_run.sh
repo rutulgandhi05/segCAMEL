@@ -14,6 +14,6 @@
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
 source venv/bin/activate
-python -m scripts.feature_extractor
+python -m scripts.preprocess
 
 
