@@ -4,7 +4,10 @@ import yaml
 from PIL import Image
 from hercules.aeva import load_aeva_bin
 import tqdm
+import io
 from utils.files import read_mcap_file
+from utils.misc import find_closest_stamp
+from scantinel.parse_mcap_pcl import parse_pcl
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     """
@@ -107,35 +110,58 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
 
 
 def load_scantinel_dataset_folder(dataset_folder: Path):
-    
+    """
+    Load paired LiDAR and Camera data from Scantinel dataset folder.
+
+    Args:
+        dataset_folder (Path): Path to the dataset root.
+
+    Returns:
+        list of dicts: Each dict contains 'pointcloud', 'image', 'timestamps', and 'intrinsics'.
+    """
+
+    # Find all FMCW and Camera MCAP files
     lidar_files = sorted(dataset_folder.glob("*FMCW.mcap"))
-    print(f"Found {len(lidar_files)} LiDAR files.")
     cam_files = sorted(dataset_folder.glob("*CAM.mcap"))
-    print(f"Found {len(cam_files)} camera files.")
-    
+
     if not lidar_files or not cam_files:
-        raise ValueError("No LiDAR or camera files found in the dataset folder.")
-    
-    # Load LiDAR data
+        raise ValueError(f"No LiDAR or camera files found in the dataset folder: {dataset_folder}")
+
+    # Read all LiDAR messages
     lidar_data = []
-
-    for lidar_file in tqdm.tqdm(lidar_files, desc="Loading LiDAR data", unit="file", leave=False):
+    for lidar_file in tqdm.tqdm(lidar_files, desc="Loading LiDAR"):
         msgs = read_mcap_file(lidar_file, ["/FMCW_pointclouds[0]"])
-        for msg in msgs:
-            lidar_data.append((msg.proto_msg.data, msg.log_time))
+        lidar_data.extend((msg.proto_msg.data, msg.log_time) for msg in msgs)
 
-    # Load camera data
+    # Read all Camera messages
     cam_data = []
-    for cam_file in tqdm.tqdm(cam_files, desc="Loading camera data", unit="file", leave=False):
+    for cam_file in tqdm.tqdm(cam_files, desc="Loading Camera"):
         msgs = read_mcap_file(cam_file, ["/camera"])
-        for msg in msgs:
-            cam_data.append((msg.proto_msg.data, msg.log_time))
+        cam_data.extend((msg.proto_msg.data, msg.log_time) for msg in msgs)
 
-    # print lidar camera stamps print  none for not available stamps
-    lidar_stamps = [msg[1] for msg in lidar_data]
     cam_stamps = [msg[1] for msg in cam_data]
+
+    intrinsics = np.array([[640, 0, 320], [0, 480, 240], [0, 0, 1]], dtype=np.float32)
+
+    paired_samples = []
+    for pcl in tqdm.tqdm(lidar_data, desc="Pairing LiDAR and Camera data"):
+        # Decode LiDAR
+        pointcloud, ts_lidar = pcl
+        pointcloud = parse_pcl(pointcloud, point_stride=40, dtype=np.float32, num_fields=10)
+
+        ts_cam = find_closest_stamp(cam_stamps, ts_lidar)
+        cam = next((msg for msg in cam_data if msg[1] == ts_cam), None)
+
+        sample = {
+            "pointcloud": pointcloud,  # shape: (N, 6)
+            "image": io.BytesIO(cam[0]),
+            "intrinsics": intrinsics,
+            "timestamps": [ts_lidar.timestamp(), ts_cam.timestamp()],
+        }
+        paired_samples.append(sample)
+
+    return paired_samples
     
-    return lidar_stamps, cam_stamps
 
 
 if __name__ == "__main__":

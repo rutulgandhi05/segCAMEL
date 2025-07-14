@@ -6,7 +6,7 @@ from dinotool.model import load_model, DinoFeatureExtractor, PCAModule
 import tempfile
 from utils.visualization import create_video_from_frames
 from tqdm import tqdm
-
+import torch
 class Extractor:
     def __init__(self, dino_model: str ="dinov2_vits14_reg", clip_model: str ="clip_vit_b32"):
         """
@@ -23,7 +23,7 @@ class Extractor:
         self.transform_factory=TransformFactory(model_name=self.dino_model, patch_size=self.model.patch_size)
         self.pca = PCAModule(n_components=3)
 
-    def extract_dino_features(self, image: Image.Image, filename: str = "single_file"):
+    def extract_dino_features(self, image, filename: str = "single_file"):
         """
         Extracts features from a single image using the Dinov2 model.
         
@@ -33,21 +33,20 @@ class Extractor:
         Returns:
             dict: A dictionary containing the filename, extracted features, input size, and feature map size.
         """
-        if not image:
-            raise Image.UnidentifiedImageError("No image provided for feature extraction.")
         
         #print(f"Processing image: {filename}")
         #print(f"Image size: {image.size}")
 
-
         transform = self.transform_factory.get_transform(image.size)
         input_size = transform.resize_size
         feature_map_size = transform.feature_map_size
-        #print(f"Model input size: {input_size}")
-        #print(f"Feature map size: {feature_map_size}")
+        print("[DINOv2] >> Model:", self.dino_model)
+        print(f"[DINOv2] >> Input size: {input_size}")
+        print(f"[DINOv2] >> Patch size: {self.model.patch_size}")
+        print(f"[DINOv2] >> Feature map size: {feature_map_size}")
 
-        image_tensor = transform.transform(image).unsqueeze(0)
-        features = self.extractor(image_tensor)
+        images_tensor = transform.transform(image).unsqueeze(0)
+        features = self.extractor(images_tensor)
         return {
             "filename": filename,
             "features": features,
@@ -56,7 +55,7 @@ class Extractor:
         } 
         
 
-    def visualize_dino_features(self, image: Image.Image, features: LocalFeatures, input_size: tuple, feature_map_size: tuple, filename: str = "single_image", only_pca: bool = False, visualize: bool = False):
+    def visualize_dino_features(self, image: torch.Tensor, features: LocalFeatures, input_size: tuple, feature_map_size: tuple, filename: str = "single_image", only_pca: bool = False, visualize: bool = False):
         """
         Visualizes the extracted features using PCA and displays the image.
         
@@ -89,12 +88,12 @@ class Extractor:
             out_img.show()
         return out_img
     
-    def visualize_dino_features_video(self, images: list[Image.Image], outfile_path: Path, framerate: int = 30, save_images=False):
+    def visualize_dino_features_video(self, images: torch.Tensor, outfile_path: Path, framerate: int = 30, save_images=False):
         """
         Creates a video from the extracted feature images.
         
         Parameters:
-            feature_images (list): List of (feature,image) to be included in the video.
+            feature_images (list): List of PIL Image objects containing the feature images.
             outfile_path (Path): Path where the video will be saved, ending in .mp4.
             framerate (int): Frame rate for the video. Default is 5.
             save_images (bool): If True, saves the feature images to a outfile_path.parent/"feature_images". Default is False.
@@ -137,8 +136,9 @@ class Extractor:
 
 if __name__ == "__main__":
     from utils.files import read_mcap_file
-    
+    import matplotlib.pyplot as plt
     import io
+    import numpy as np
     
     # Example usage
     images = []
@@ -147,15 +147,32 @@ if __name__ == "__main__":
     f = Path(f)
 
     data = read_mcap_file(f, ["/camera"])
-   
+    extractor = Extractor()
+
     for idx, msg in tqdm(enumerate(data), desc="Reading images", total=len(data), leave=False, unit="image"):
         image = Image.open(io.BytesIO(msg.proto_msg.data)).convert("RGB")
         images.append(image)
 
-    extractor = Extractor()
+    
 
-    output_video_path = Path("data/scantinel/feature_vids")
+    """ output_video_path = Path("data/scantinel/feature_vids")
     output_video_path.mkdir(parents=True, exist_ok=True)
     output_video_path = output_video_path / f"{f.stem}.mp4"
 
-    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, save_images=True)
+    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, save_images=True) """
+
+    img  = Image.open(io.BytesIO(data[0].proto_msg.data)).convert("RGB")
+    features = extractor.extract_dino_features(image=img, filename=f"{f.stem}_{0:05d}")
+
+    extractor.pca.feature_map_size=features['feature_map_size']
+    extractor.pca.fit(features['features'].flat().tensor, verbose=False)
+    pca_array = extractor.pca.transform(features['features'].flat().tensor, flattened=False)[0]
+    """ pca_img = Image.fromarray((pca_array* 255).astype(np.uint8)).resize(
+        features['input_size'], Image.NEAREST
+    ) """
+
+    i = 2
+    img_i = (pca_array* 255).astype(np.uint8)
+    img_pil = Image.fromarray(img_i[..., i]).resize(features['input_size'], Image.NEAREST)
+    img_pil.show(title=f"PCA Component {i+1}")
+    img_pil.save(f"data/scantinel/feature_images/pca_component_{i+1}.png") 
