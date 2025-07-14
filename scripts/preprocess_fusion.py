@@ -82,7 +82,7 @@ def preprocess_and_save(
 
         # === Step 4: Check alignment ===
         if pts3d_patches.shape[0] != dino_feat_tensor.shape[0]:
-            print(f"[⚠️ Frame {idx}] Patch mismatch: DUSt3R={pts3d_patches.shape[0]}, DINO={dino_feat_tensor.shape[0]}")
+            print(f"[Frame {idx}] Patch mismatch: DUSt3R={pts3d_patches.shape[0]}, DINO={dino_feat_tensor.shape[0]}")
             min_len = min(pts3d_patches.shape[0], dino_feat_tensor.shape[0])
             pts3d_patches = pts3d_patches[:min_len]
             dino_feat_tensor = dino_feat_tensor[:min_len]
@@ -106,7 +106,7 @@ def preprocess_and_save(
 
         save_path = save_dir / f"frame_{idx:05d}.pth"
         torch.save(save_data, save_path)
-        print(f"[💾 Saved] {save_path}")
+        print(f"[Saved] {save_path}")
 
 if __name__ == "__main__":
     ROOT_DIR = "data/scantinel/250612_RG_dynamic_test_drive/IN003_MUL_SEN_0.2.0.post184+g6da4bed"
