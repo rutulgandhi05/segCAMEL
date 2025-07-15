@@ -193,3 +193,7 @@ data/hercules
 meta_Checkpoint/
 error.txt
 output.txt
+train_error.txt
+train_output.txt
+preprocess_error.txt
+preprocess_output.txt
