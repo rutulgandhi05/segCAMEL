@@ -1,8 +1,8 @@
 
 --find-links https://download.pytorch.org/whl/cu128
-torch==2.6.0
-torchvision==0.21.0 
-torchaudio==2.6.0 
+torch
+torchvision
+torchaudio
 
 --find-links https://data.pyg.org/whl/torch-2.6.0+cu128.html
 torch_scatter 
