@@ -12,7 +12,7 @@ torch_geometric
 
 addict 
 scipy 
-spconv-cu124
+spconv-cu128
 open3d
 toml
 mcap-protobuf-support
