@@ -4,7 +4,7 @@ torch
 torchvision
 torchaudio
 
---find-links https://data.pyg.org/whl/torch-2.6.0+cu128.html
+.--find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html
 torch_scatter 
 torch_sparse 
 torch_cluster 
