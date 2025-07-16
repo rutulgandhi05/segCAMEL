@@ -91,7 +91,9 @@ def preprocess_and_save_scantinel(
 
         # === Step 5: Assign features to LiDAR points using k-NN ===
         pointcloud = batch["pointcloud"][0].numpy()
-        lidar_xyz = pointcloud[:, :3]           # [N, 3]
+        lidar_xyz = pointcloud[:, :3]  
+        # Swap X and Y for X-forward convention
+        lidar_xyz = lidar_xyz[:, [1, 0, 2]]     # Now: X=forward, Y=left, Z=up         # [N, 3]
         lidar_feats = pointcloud[:, 3:]         # [N, 3] (keep, ignore for now)
 
         knn = NearestNeighbors(n_neighbors=1).fit(pts3d_patches)
