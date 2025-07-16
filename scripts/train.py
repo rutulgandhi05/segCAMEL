@@ -100,6 +100,7 @@ def train(
                 "offset": offset,
             }
 
+            logger.info("grid_size used:", data_dict["grid_size"])
             optimizer.zero_grad()
             pred = model(data_dict).feat
             loss = distillation_loss(pred, dino_feat)
