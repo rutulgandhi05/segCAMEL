@@ -77,6 +77,7 @@ def train(
             coord = sample["coord"].to(device)
             feat = sample["feat"].to(device)
             dino_feat = sample["dino_feat"].to(device)
+            grid_size = sample["grid_size"].to(device)
 
             # -- Select features based on input_mode --
             if input_mode == "dino_only":
@@ -91,13 +92,7 @@ def train(
                 raise ValueError(f"Unknown input_mode: {input_mode}")
 
             offset = torch.tensor([coord.shape[0]], device=device)
-
-            grid_size = sample.get("grid_size", 0.05)
-            if not torch.is_tensor(grid_size):
-                grid_size = torch.tensor(grid_size, device=device)
-            else:
-                grid_size = grid_size.to(device)
-
+        
             data_dict = {
                 "coord": coord,
                 "feat": input_feat,

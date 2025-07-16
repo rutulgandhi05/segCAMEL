@@ -22,7 +22,6 @@ def lcm(a, b):
 def preprocess_and_save_scantinel(
     root_dir,
     save_dir,
-    grid_size=0.05,
     device="cuda" if torch.cuda.is_available() else "cpu"
 ):
     save_dir = Path(save_dir)
@@ -100,11 +99,22 @@ def preprocess_and_save_scantinel(
         assigned_feats = dino_feat_tensor[indices.squeeze(1)]  # [N, feat_dim]
 
         # === Step 6: Save ===
+        # Manually calculate grid size based on LiDAR point cloud extent and number of unique grid cells
+        min_xyz = lidar_xyz.min(axis=0)
+        max_xyz = lidar_xyz.max(axis=0)
+        # Estimate grid size as the average spacing between points along each axis
+        if lidar_xyz.shape[0] > 1:
+            diffs = np.diff(np.sort(lidar_xyz, axis=0), axis=0)
+            mean_spacing = np.mean(np.abs(diffs), axis=0)
+            grid_size_manual = float(np.mean(mean_spacing))
+        else:
+            grid_size_manual = 0.05  # fallback if only one point
+
         save_data = {
             "coord": torch.tensor(lidar_xyz, dtype=torch.float32),
             "feat": torch.tensor(lidar_feats, dtype=torch.float32),
             "dino_feat": torch.tensor(assigned_feats, dtype=torch.float32),
-            "grid_size": grid_size
+            "grid_size": torch.tensor(grid_size_manual, dtype=torch.float32)
         }
 
         save_path = save_dir / f"frame_{idx:05d}.pth"
