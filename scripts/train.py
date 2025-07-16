@@ -92,10 +92,16 @@ def train(
 
             offset = torch.tensor([coord.shape[0]], device=device)
 
+            grid_size = sample.get("grid_size", 0.05)
+            if not torch.is_tensor(grid_size):
+                grid_size = torch.tensor(grid_size, device=device)
+            else:
+                grid_size = grid_size.to(device)
+
             data_dict = {
                 "coord": coord,
                 "feat": input_feat,
-                "grid_size": sample.get("grid_size", 0.05),
+                "grid_size": grid_size,
                 "offset": offset,
             }
 
