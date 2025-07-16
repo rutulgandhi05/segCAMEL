@@ -95,6 +95,7 @@ def train(
             data_dict = {
                 "coord": coord,
                 "feat": input_feat,
+                "grid_size": sample.get("grid_size", 0.05),
                 "offset": offset,
             }
 
