@@ -12,8 +12,8 @@ class Dust3RWrapper:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = AsymmetricCroCo3DStereo.from_pretrained(model_name).to(self.device).eval()
 
-    def predict_pointmap(self, pil_img):
-        img_list = load_images([pil_img, pil_img], 512)
+    def predict_pointmap(self, pil_img1, pil_img2=None):
+        img_list = load_images([pil_img1, pil_img2], 512) if pil_img2 else load_images([pil_img1, pil_img1], 512)
         pairs = make_pairs(img_list, scene_graph='complete', prefilter=None, symmetrize=True)
         logger.info(f"Loaded {len(pairs)} image pairs for inference.")
         output = inference(pairs, self.model, device=self.device, batch_size=1)

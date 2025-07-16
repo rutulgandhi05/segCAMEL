@@ -6,8 +6,9 @@ from hercules.aeva import load_aeva_bin
 import tqdm
 import io
 from utils.files import read_mcap_file
-from utils.misc import find_closest_stamp
+from utils.misc import find_closest_stamp, find_closest_cam_stamp_to_aeva
 from scantinel.parse_mcap_pcl import parse_pcl
+import pandas as pd
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     """
@@ -34,10 +35,18 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     left_img_folder = dataset_folder / "Image" / "stereo_left"
     right_img_folder = dataset_folder / "Image" / "stereo_right"
     calib_folder = dataset_folder / "Calibration"
+    sensor_data_folder = dataset_folder / "Sensor_data"
 
     # Load calibration intrinsics
     stereo_left_intr_path = calib_folder / "stereo_left.yaml"
     stereo_right_intr_path = calib_folder / "stereo_right.yaml"
+
+    data_stamp = sensor_data_folder / "data_stamp.csv"
+    if data_stamp.exists():
+        data_stamp_df = pd.read_csv(data_stamp, header=None, names=["timestamp", "sensor"])
+        data_stamp_df = data_stamp_df[data_stamp_df["sensor"].isin(["aeva", "stereo_left", "stereo_right"])]
+    else:
+        data_stamp_df = None
 
     if stereo_left_intr_path.exists():
         with stereo_left_intr_path.open("r") as f:
@@ -86,28 +95,31 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
 
     # Load point clouds
-    point_clouds = []
+    paired_samples = []
     for bin_file in tqdm.tqdm(bin_files, desc="Loading point clouds", unit="file", leave=False):
-        if return_all_fields:
-            xyz, fields = load_aeva_bin(bin_file, return_all_fields=True)
-            point_clouds.append((xyz, fields))
+        point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
+        closest_left_image = find_closest_cam_stamp_to_aeva(int(bin_file.stem), data_stamp_df, sensor="stereo_left") if data_stamp_df is not None else None
+        closest_right_image = find_closest_cam_stamp_to_aeva(int(bin_file.stem), data_stamp_df, sensor="stereo_right") if data_stamp_df is not None else None
+        if closest_left_image is not None:
+            left_image = next((img for img in left_images if img.stem == str(closest_left_image)), None)
         else:
-            xyz = load_aeva_bin(bin_file, return_all_fields=False)
-            point_clouds.append(xyz)
+            left_image = None
+        if closest_right_image is not None:
+            right_image = next((img for img in right_images if img.stem == str(closest_right_image)), None)
+        else:
+            right_image = None
+        if point_cloud is None:
+            continue
+        paired_samples.append({
+            "pointcloud": point_cloud,
+            "left_image": left_image,
+            "right_image": right_image,
+            "timestamps": [bin_file.stem],
+            "stereo_left_intrinsics": stereo_left_intrinsic,
+            "stereo_right_intrinsics": stereo_right_intrinsic,
+        })
 
-    return {
-        "point_clouds": point_clouds,
-        "point_cloud_paths": bin_files,
-        "stereo_left_images": left_images,
-        "stereo_right_images": right_images,
-        "stereo_left_intrinsics": stereo_left_intrinsic,
-        "stereo_right_intrinsics": stereo_right_intrinsic,
-        "stereo_left_distortion": stereo_left_distortion,
-        "stereo_right_distortion": stereo_right_distortion,
-        "lidar_to_stereo_left_extrinsic": lidar_to_left_extrinsic,
-        "lidar_to_stereo_right_extrinsic": lidar_to_right_extrinsic,
-    }
-
+    return paired_samples
 
 def load_scantinel_dataset_folder(dataset_folder: Path):
     """

@@ -73,7 +73,6 @@ def train(
         logger.info(f"\n🌀 Epoch {epoch + 1}/{epochs}")
 
         for sample in tqdm(dataloader):
-            sample = sample[0]  # remove batch dimension
 
             coord = sample["coord"].to(device)
             feat = sample["feat"].to(device)
