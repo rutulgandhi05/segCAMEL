@@ -110,11 +110,12 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
             right_image = None
         if point_cloud is None:
             continue
+        
         paired_samples.append({
             "pointcloud": point_cloud,
             "left_image": left_image,
             "right_image": right_image,
-            "timestamps": [bin_file.stem],
+            "timestamps": [int(bin_file.stem), int(closest_left_image), int(closest_right_image)],
             "stereo_left_intrinsics": stereo_left_intrinsic,
             "stereo_right_intrinsics": stereo_right_intrinsic,
         })

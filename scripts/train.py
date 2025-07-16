@@ -70,7 +70,7 @@ def train(
     for epoch in range(epochs):
         model.train()
         total_loss = 0
-        logger.info(f"\n🌀 Epoch {epoch + 1}/{epochs}")
+        logger.info(f"\n Epoch {epoch + 1}/{epochs}")
 
         for sample in tqdm(dataloader):
 
@@ -95,7 +95,6 @@ def train(
             data_dict = {
                 "coord": coord,
                 "feat": input_feat,
-                "grid_size": sample.get("grid_size", 0.05),
                 "offset": offset,
             }
 

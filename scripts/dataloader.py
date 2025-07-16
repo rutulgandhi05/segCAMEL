@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 from pathlib import Path
 from torchvision import transforms
-from scripts.dataset import load_scantinel_dataset_folder
+from scripts.dataset import load_scantinel_dataset_folder, load_hercules_dataset_folder
 from PIL import Image
 
 class ScantinelDataset(Dataset):
@@ -37,4 +37,33 @@ class ScantinelDataset(Dataset):
             "timestamps": sample["timestamps"]    # list (lidar_ts, cam_ts)
         }
 
-    
+class HerculesDataset(Dataset):
+    def __init__(self, root_dir):
+        """
+        PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
+
+        Args:
+            root_dir (str or Path): Dataset folder.
+        """
+        self.root_dir = Path(root_dir)
+        self.samples = load_hercules_dataset_folder(self.root_dir)
+        self.transform = transforms.Compose([
+            transforms.PILToTensor(),
+        ])
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        image = Image.open(sample["image"]).convert("RGB")
+        pointcloud = sample["pointcloud"]
+        image_tensor = self.transform(image)
+        image.close()
+
+        return {
+            "pointcloud": pointcloud,
+            "image_tensor": image_tensor,
+            "timestamps": sample["timestamps"],
+            "intrinsics": sample["intrinsics"]
+        }
