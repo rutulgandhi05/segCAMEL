@@ -42,8 +42,8 @@ def preprocess_and_save_scantinel(
     target_patch = lcm(dino_patch, dust3r_patch)
     # Pick a reasonable crop size that's a multiple of LCM (and not huge for GPU)
     # E.g., 448x336, 560x448, etc.
-    target_w = 448  # Change as needed (must be multiple of target_patch)
-    target_h = 336
+    target_w = 560  # Change as needed (must be multiple of target_patch)
+    target_h = 448
 
     logger.info(f"DINO patch: {dino_patch}, DUSt3R patch: {dust3r_patch}, target crop: {target_w}x{target_h}")
 
