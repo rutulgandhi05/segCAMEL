@@ -11,7 +11,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-CLIENT_SECRETS_FILE = "hercules/dataset_download/hercules.json"
+CLIENT_SECRETS_FILE = "hercules/dataset_download/client_secret.json"
 SCOPES = ['https://www.googleapis.com/auth/drive']
 local_path = os.path.join(os.getcwd(), "exports")
 
