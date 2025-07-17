@@ -6,7 +6,7 @@
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 00:55:00 
+#SBATCH -t 00:30:00 
 #SBATCH -p dev_cpu_il
 
 #SBATCH --mem=64000
