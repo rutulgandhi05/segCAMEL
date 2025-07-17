@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -132,3 +133,34 @@ def create_video_from_frames(
         raise RuntimeError(
             f"An unexpected error occurred while creating video: {e}"
         ) from e
+    
+
+
+
+def visualize_pth_pointcloud_with_dino(pth_file, n_pca=3, window_name="LiDAR+DINO 3D"):
+    """
+    Loads a preprocessed .pth file, colors by PCA(DINO feature), and shows point cloud in Open3D.
+    """
+    try:
+        import open3d as o3d
+    except ImportError:
+        print("Install open3d for interactive visualization.")
+        return
+
+    data = torch.load(pth_file, map_location="cpu")
+    coords = data["coord"].cpu().numpy() if torch.is_tensor(data["coord"]) else np.asarray(data["coord"])
+    dino_feat = data["dino_feat"].cpu().numpy() if torch.is_tensor(data["dino_feat"]) else np.asarray(data["dino_feat"])
+
+    # PCA for coloring
+    pca = PCA(n_components=n_pca)
+    colors = pca.fit_transform(dino_feat)
+    colors = (colors - colors.min()) / (colors.max() - colors.min())
+    if n_pca > 3:
+        colors = colors[:, :3]
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(coords)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    o3d.visualization.draw_geometries([pcd], window_name=window_name)
+
+
