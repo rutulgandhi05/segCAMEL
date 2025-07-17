@@ -21,6 +21,7 @@ if not os.path.exists(local_path):
 def get_google_auth_user_info():
     creds = None
     if os.path.exists('hercules/dataset_download/token.pickle'):
+        print("Loading credentials from token.pickle")
         with open('hercules/dataset_download/token.pickle', 'rb') as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
