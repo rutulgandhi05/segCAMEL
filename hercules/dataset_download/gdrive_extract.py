@@ -20,8 +20,8 @@ if not os.path.exists(local_path):
 
 def get_google_auth_user_info():
     creds = None
-    if os.path.exists('dataset_download/token.pickle'):
-        with open('dataset_download/token.pickle', 'rb') as token:
+    if os.path.exists('hercules/dataset_download/token.pickle'):
+        with open('hercules/dataset_download/token.pickle', 'rb') as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -55,13 +55,13 @@ def download_files(service, file_id, filename):
         f.close()
 
 def main():
-    to_download = toml.load("dataset_download/to_download.toml")
+    to_download = toml.load("hercules/dataset_download/to_download.toml")
     service = create_service()
     out_folder = Path(to_download.get("output_folder"))
     if not os.path.exists(out_folder):
         raise Exception(f"Output folder {out_folder} does not exist. Please create it first.")
-    
-    metadata = json.load(open("dataset_download/hercules.json"))
+
+    metadata = json.load(open("hercules/dataset_download/hercules.json"))
     for obj in metadata:
         current_folder = obj.get("folder")
         print(f"\n####### Current folder: {current_folder} #######")
