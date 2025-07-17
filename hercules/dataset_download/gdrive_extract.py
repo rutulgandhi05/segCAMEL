@@ -30,7 +30,7 @@ def get_google_auth_user_info():
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
+        with open('hercules/dataset_download/token.pickle', 'wb') as token:
             pickle.dump(creds, token)
     creds_json = creds.to_json()
     return json.loads(creds_json)
