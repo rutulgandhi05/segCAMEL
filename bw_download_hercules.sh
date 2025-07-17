@@ -14,6 +14,6 @@
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
 source venv/bin/activate
-python -m hercules.gdrive_extract
+python -m hercules.dataset_download.gdrive_extract
 
 
