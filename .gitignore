@@ -199,3 +199,5 @@ preprocess_error.txt
 preprocess_output.txt
 client_secret.json
 hercules/dataset_download/client_secret.json
+hercules_error.txt
+hercules_output.txt
