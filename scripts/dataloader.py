@@ -56,7 +56,7 @@ class HerculesDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample["image"]).convert("RGB")
+        image = Image.open(sample["right_image"]).convert("RGB")
         pointcloud = sample["pointcloud"]
         image_tensor = self.transform(image)
         image.close()
@@ -65,5 +65,5 @@ class HerculesDataset(Dataset):
             "pointcloud": pointcloud,
             "image_tensor": image_tensor,
             "timestamps": sample["timestamps"],
-            "intrinsics": sample["intrinsics"]
+            "intrinsics": sample["stereo_right_intrinsic"]
         }
