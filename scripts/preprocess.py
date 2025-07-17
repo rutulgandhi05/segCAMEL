@@ -163,7 +163,7 @@ def preprocess_and_save_hercules(
 
     logger.info(f"DINO patch: {dino_patch}, DUSt3R patch: {dust3r_patch}, target crop: {target_w}x{target_h}")
 
-    for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
+    for idx, batch in enumerate(tqdm(dataloader[:50], desc="Processing frames")):
         # Use left camera for main processing
         image_tensor = batch["image_tensor"][0]
         pil_img = ToPILImage()(image_tensor).convert("RGB")
@@ -244,10 +244,10 @@ def preprocess_and_save_hercules(
 
 
 if __name__ == "__main__":
-    SCANTINEL_ROOT_DIR = "data/scantinel/250612_RG_dynamic_test_drive/IN003_MUL_SEN_0.2.0.post184+g6da4bed"
+    """ SCANTINEL_ROOT_DIR = "data/scantinel/250612_RG_dynamic_test_drive/IN003_MUL_SEN_0.2.0.post184+g6da4bed"
     SCANTINEL_SAVE_DIR = "data/scantinel/250612_RG_dynamic_test_drive/IN003_processed_pth"
-    preprocess_and_save_scantinel(SCANTINEL_ROOT_DIR, SCANTINEL_SAVE_DIR)
+    preprocess_and_save_scantinel(SCANTINEL_ROOT_DIR, SCANTINEL_SAVE_DIR) """
 
-    HERCULES_ROOT_DIR = "data/hercules/your_hercules_data_dir"
-    HERCULES_SAVE_DIR = "data/hercules/processed_data"
+    HERCULES_ROOT_DIR = "data/hercules/Mountain_01_Day/"
+    HERCULES_SAVE_DIR = "data/hercules/Mountain_01_Day/processed_data"
     preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR)
