@@ -65,5 +65,5 @@ class HerculesDataset(Dataset):
             "pointcloud": pointcloud,
             "image_tensor": image_tensor,
             "timestamps": sample["timestamps"],
-            "intrinsics": sample["stereo_right_intrinsic"]
+            "intrinsics": sample["stereo_right_intrinsics"]
         }
