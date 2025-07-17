@@ -43,8 +43,8 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
 
     data_stamp = sensor_data_folder / "data_stamp.csv"
     if data_stamp.exists():
-        data_stamp_df = pd.read_csv(data_stamp, header=None, names=["timestamp", "sensor"])
-        data_stamp_df = data_stamp_df[data_stamp_df["sensor"].isin(["aeva", "stereo_left", "stereo_right"])]
+        data_stamp_df = pd.read_csv(data_stamp, header=None)
+        data_stamp_df = data_stamp_df[data_stamp_df[1].isin(["aeva", "stereo_left", "stereo_right"])]
     else:
         data_stamp_df = None
 
