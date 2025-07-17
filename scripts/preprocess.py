@@ -163,7 +163,7 @@ def preprocess_and_save_hercules(
 
     logger.info(f"DINO patch: {dino_patch}, DUSt3R patch: {dust3r_patch}, target crop: {target_w}x{target_h}")
 
-    for idx, batch in enumerate(tqdm(dataloader[:50], desc="Processing frames")):
+    for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
         # Use left camera for main processing
         image_tensor = batch["image_tensor"][0]
         pil_img = ToPILImage()(image_tensor).convert("RGB")
