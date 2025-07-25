@@ -55,112 +55,21 @@ class PointCloudVisualizer:
                 raise ValueError("Colors must be [N,3] (RGB)")
         o3d.visualization.draw_geometries([pcd])
 
-def visualize_dino_semantic_image(dino_feat_tensor, feature_map_size, save_path=None):
-    """
-    Visualize DINO patch features as a 'semantic' image using PCA for RGB mapping.
-    """
-    num_patches, feat_dim = dino_feat_tensor.shape
-    grid_w, grid_h = feature_map_size  # (w, h)
+
+
+
+def visualize_pca_colored_pointcloud(xyz: np.ndarray, features: np.ndarray, mask: np.ndarray):
+    # Reduce feature dimension to 3D for RGB coloring
     pca = PCA(n_components=3)
-    feat_rgb = pca.fit_transform(dino_feat_tensor)
-    feat_rgb = (feat_rgb - feat_rgb.min()) / (feat_rgb.max() - feat_rgb.min())
-    feat_rgb = feat_rgb.reshape(grid_h, grid_w, 3)  # (h, w, 3) for imshow
+    reduced = pca.fit_transform(features)
 
-    plt.figure(figsize=(8, 6))
-    plt.title("DINO Patchwise Semantic (PCA RGB)")
-    plt.imshow(feat_rgb)
-    plt.axis('off')
-    if save_path is not None:
-        plt.savefig(save_path)
-        print(f"Saved DINO semantic image to {save_path}")
-    plt.show()
-    plt.close()
+    # Normalize to 0-1 for coloring
+    colors = (reduced - reduced.min(axis=0)) / (reduced.max(axis=0) - reduced.min(axis=0) + 1e-6)
+    colors[mask == 0] = [0.5, 0.5, 0.5]  # grey out invisible points
 
-def visualize_patch_3d_pointcloud(pts3d_patches, dino_feat_tensor, save_path=None, use_open3d=False):
-    """
-    Visualize DUSt3R 3D patch centers colored by DINO features (via PCA).
-    """
-    pca = PCA(n_components=3)
-    feat_rgb = pca.fit_transform(dino_feat_tensor)
-    feat_rgb = (feat_rgb - feat_rgb.min()) / (feat_rgb.max() - feat_rgb.min())
-    if use_open3d and o3d is not None:
-        PointCloudVisualizer.visualize_open3d(pts3d_patches, feat_rgb)
-    else:
-        PointCloudVisualizer.plot_pointcloud(pts3d_patches, feat_rgb, title="DUSt3R Patch Centers (PCA RGB)", save_path=save_path)
-
-def visualize_lidar_semantics(lidar_xyz, assigned_feats, save_path=None, use_open3d=False):
-    """
-    Visualize LiDAR point cloud colored by assigned DINO features (via PCA).
-    """
-    pca = PCA(n_components=3)
-    assigned_feat_rgb = pca.fit_transform(assigned_feats)
-    assigned_feat_rgb = (assigned_feat_rgb - assigned_feat_rgb.min()) / (assigned_feat_rgb.max() - assigned_feat_rgb.min())
-    if use_open3d and o3d is not None:
-        PointCloudVisualizer.visualize_open3d(lidar_xyz, assigned_feat_rgb)
-    else:
-        PointCloudVisualizer.plot_pointcloud(lidar_xyz, assigned_feat_rgb, title="LiDAR Points (Assigned DINO Feature RGB)", save_path=save_path)
-
-
-def create_video_from_frames(
-    tmpdir: str, output_path: str, framerate: float = 30
-) -> None:
-    """Create video from frame images using ffmpeg."""
-    output_path = Path(output_path)
-    if not output_path.parent.exists():
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        
-        import cv2
-
-        images = sorted(Path(tmpdir).glob("*.jpg"))
-        frame = cv2.imread(str(images[0]))
-        height, width, layers = frame.shape
-
-        # Video writer to create .avi file
-        video = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*'DIVX'), framerate, (width, height))
-        # Appending images to video
-        for image in images:
-            video.write(cv2.imread(str(image)))
-
-        # Release the video file
-        video.release()
-        cv2.destroyAllWindows()
-        print("Video generated successfully!")
-
-        print(f"Saved visualization to {output_path}")
-    
-    except Exception as e:
-        raise RuntimeError(
-            f"An unexpected error occurred while creating video: {e}"
-        ) from e
-    
-
-
-
-def visualize_pth_pointcloud_with_dino(pth_file, n_pca=3, window_name="LiDAR+DINO 3D"):
-    """
-    Loads a preprocessed .pth file, colors by PCA(DINO feature), and shows point cloud in Open3D.
-    """
-    try:
-        import open3d as o3d
-    except ImportError:
-        print("Install open3d for interactive visualization.")
-        return
-
-    data = torch.load(pth_file, map_location="cpu")
-    coords = data["coord"].cpu().numpy() if torch.is_tensor(data["coord"]) else np.asarray(data["coord"])
-    dino_feat = data["dino_feat"].cpu().numpy() if torch.is_tensor(data["dino_feat"]) else np.asarray(data["dino_feat"])
-
-    # PCA for coloring
-    pca = PCA(n_components=n_pca)
-    colors = pca.fit_transform(dino_feat)
-    colors = (colors - colors.min()) / (colors.max() - colors.min())
-    if n_pca > 3:
-        colors = colors[:, :3]
-
+    # Create Open3D point cloud
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(coords)
+    pcd.points = o3d.utility.Vector3dVector(xyz)
     pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.visualization.draw_geometries([pcd], window_name=window_name)
-
-
+    
+    o3d.visualization.draw_geometries([pcd])

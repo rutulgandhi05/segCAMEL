@@ -118,6 +118,8 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
             "timestamps": [int(bin_file.stem), int(closest_left_image), int(closest_right_image)],
             "stereo_left_intrinsics": stereo_left_intrinsic,
             "stereo_right_intrinsics": stereo_right_intrinsic,
+            "lidar_to_stereo_left_extrinsic": lidar_to_left_extrinsic,
+            "lidar_to_stereo_right_extrinsic": lidar_to_right_extrinsic,
         })
 
     return paired_samples

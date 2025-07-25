@@ -1,65 +1,81 @@
+from tkinter import Image
 import numpy as np
+import torch
+from typing import Tuple
 
+class LidarToImageProjector:
+    def __init__(
+        self,
+        intrinsic: np.ndarray,
+        extrinsic: np.ndarray,
+        image_size: Tuple[int, int],
+        feature_map_size: Tuple[int, int],
+        patch_features: torch.Tensor,
+    ):
+        self.K = intrinsic  # (3x3)
+        self.T = extrinsic  # (4x4) LiDAR-to-Camera
+        self.image_size = image_size  # (width, height)
+        self.feature_map_size = feature_map_size  # (w_patches, h_patches)
+        self.features = patch_features.squeeze(0).cpu().numpy()  # [N_patches, D]
+        self.patch_w = image_size[0] / feature_map_size[0]
+        self.patch_h = image_size[1] / feature_map_size[1]
 
-class Projector:
-    def __init__(self, patch_size=14):
-        self.patch_size = patch_size
-        self.input_image_size = None         # (H, W) of the resized image input to DINO
-        self.feature_map_size = None         # (H_patch, W_patch) feature grid
-        self.K = None                        # Intrinsic matrix
+    def project_points(self, lidar_xyz: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        N = lidar_xyz.shape[0]
+        lidar_homo = np.hstack([lidar_xyz, np.ones((N, 1))])  # (N, 4)
+        cam_xyz = (self.T @ lidar_homo.T).T[:, :3]  # (N, 3)
 
-    def set_camera_intrinsics(self, K):
-        self.K = K
+        valid_mask = cam_xyz[:, 2] > 0  # only points in front of the camera
+        cam_pts = cam_xyz[valid_mask]
 
-    def project_points(self, points):
-        """
-        Projects 3D LiDAR points to 2D pixel coordinates and computes patch IDs.
-        """
-        fx, fy = self.K[0, 0], self.K[1, 1]
-        cx, cy = self.K[0, 2], self.K[1, 2]
+        pixel_coords = (self.K @ cam_pts.T).T  # (N_valid, 3)
+        uvs = pixel_coords[:, :2] / pixel_coords[:, 2:3]
 
-        x, y, z = points[:, 0], points[:, 1], points[:, 2]
-        z = np.where(z == 0, 1e-6, z)  # avoid divide-by-zero
-        u = (fx * x / z) + cx
-        v = (fy * y / z) + cy
-        pixel_coords = np.stack([u, v], axis=1)
-        depth = z
+        return uvs, valid_mask
 
-        h_img, w_img = self.input_image_size
-        h_feat, w_feat = self.feature_map_size
+    def assign_features(self, lidar_xyz: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        uvs, valid_mask = self.project_points(lidar_xyz)
+        N, D = lidar_xyz.shape[0], self.features.shape[1]
+        point_feats = np.zeros((N, D), dtype=np.float32)
 
-        # Normalize pixel coordinates to patch indices
-        x_idx = (pixel_coords[:, 0] / w_img * w_feat).astype(int)
-        y_idx = (pixel_coords[:, 1] / h_img * h_feat).astype(int)
-        patch_ids = y_idx * w_feat + x_idx
+        u, v = uvs[:, 0], uvs[:, 1]
+        i = np.clip((v / self.patch_h).astype(int), 0, self.feature_map_size[1] - 1)
+        j = np.clip((u / self.patch_w).astype(int), 0, self.feature_map_size[0] - 1)
+        patch_idx = i * self.feature_map_size[0] + j
 
-        return pixel_coords, patch_ids, depth
+        point_feats[valid_mask] = self.features[patch_idx]
+        return point_feats, valid_mask.astype(np.uint8)
 
-    def get_visibility_masks(self, pixel_coords, depth, image_shape, depth_thresh=0.1):
-        """
-        Returns a boolean mask for whether the 3D points project inside the image bounds.
-        """
-        h, w = image_shape
-        valid = (
-            (pixel_coords[:, 0] >= 0) &
-            (pixel_coords[:, 1] >= 0) &
-            (pixel_coords[:, 0] < w) &
-            (pixel_coords[:, 1] < h) &
-            (depth > 0)
-        )
-        return valid
+# Example usage
+def main():
+    # Dummy example, replace with real data
+    from scripts.dataset import load_hercules_dataset_folder
+    from scripts.feature_extractor import Extractor
+    from PIL import Image
+    from utils.visualization import visualize_pca_colored_pointcloud
+    
+    data = load_hercules_dataset_folder("path/to/dataset", return_all_fields=False)
+    sample = data[50]
 
-    def assign_patch_features(self, points, feature_map):
-        """
-        Assigns a DINO feature vector to each 3D LiDAR point based on projected patch ID.
-        """
-        pixel_coords, patch_ids, depth = self.project_points(points)
-        visible = self.get_visibility_masks(pixel_coords, depth, self.input_image_size)
+    left_image_path = sample["left_image"]
+    image = Image.open(left_image_path).convert("RGB")
+    intrinsic = sample["stereo_left_intrinsics"]
+    extrinsic = sample["lidar_to_stereo_left_extrinsic"]
+    
+    extractor = Extractor()
+    res = extractor.extract_dino_features(image=image, filename="sample_image")
+    feature_map_size = res['feature_map_size']
+    patch_feats = res['features'].flat().tensor
+    image_size = res['input_size']
 
-        dino_feats = np.zeros((len(points), feature_map.shape[-1]), dtype=np.float32)
-        valid_patch_ids = patch_ids[visible]
-        valid_patch_ids = np.clip(valid_patch_ids, 0, feature_map.shape[0] - 1)
-        dino_feats[visible] = feature_map[valid_patch_ids]
+    lidar_points = sample["pointcloud"]
 
-        return dino_feats
+    projector = LidarToImageProjector(
+        intrinsic, extrinsic, image_size, feature_map_size, patch_feats
+    )
+    feats, mask = projector.assign_features(lidar_points)
 
+    np.savez("data/hercules/Mountain_01_Day/lidar_with_dino_features.npz", xyz=lidar_points, dino_feats=feats, visible=mask)
+
+if __name__ == "__main__":
+    main()

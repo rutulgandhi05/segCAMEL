@@ -139,13 +139,11 @@ class Extractor:
        
 
 if __name__ == "__main__":
+    # Example usage of the Extractor class
     from utils.files import read_mcap_file
     import matplotlib.pyplot as plt
     import io
     import numpy as np
-    
-    # Example usage
-    images = []
     
     f = "data/scantinel/250612_RG_dynamic_test_drive/IN002_MUL_SEN_0.2.0.post184+g6da4bed/20250612_144055642000_to_144155593000_CAM.mcap"
     f = Path(f)
@@ -153,30 +151,18 @@ if __name__ == "__main__":
     data = read_mcap_file(f, ["/camera"])
     extractor = Extractor()
 
-    for idx, msg in tqdm(enumerate(data), desc="Reading images", total=len(data), leave=False, unit="image"):
-        image = Image.open(io.BytesIO(msg.proto_msg.data)).convert("RGB")
-        images.append(image)
-
-    
-
-    """ output_video_path = Path("data/scantinel/feature_vids")
-    output_video_path.mkdir(parents=True, exist_ok=True)
-    output_video_path = output_video_path / f"{f.stem}.mp4"
-
-    extractor.visualize_dino_features_video(images=images, outfile_path=output_video_path, framerate=30, save_images=True) """
-
     img  = Image.open(io.BytesIO(data[0].proto_msg.data)).convert("RGB")
+    print(f"Image size: {img.size} | Image mode: {img.mode}")
     features = extractor.extract_dino_features(image=img, filename=f"{f.stem}_{0:05d}")
+
+    print(f"Feature map size: {features['feature_map_size']}  | Input size: {features['input_size']} | Features shape: {features['features'].flat().tensor.shape}")
+    print("dtype:", features['features'].flat().tensor.dtype)
 
     extractor.pca.feature_map_size=features['feature_map_size']
     extractor.pca.fit(features['features'].flat().tensor, verbose=False)
     pca_array = extractor.pca.transform(features['features'].flat().tensor, flattened=False)[0]
-    """ pca_img = Image.fromarray((pca_array* 255).astype(np.uint8)).resize(
-        features['input_size'], Image.NEAREST
-    ) """
-
+  
     i = 2
     img_i = (pca_array* 255).astype(np.uint8)
     img_pil = Image.fromarray(img_i[..., i]).resize(features['input_size'], Image.NEAREST)
     img_pil.show(title=f"PCA Component {i+1}")
-    img_pil.save(f"data/scantinel/feature_images/pca_component_{i+1}.png") 
