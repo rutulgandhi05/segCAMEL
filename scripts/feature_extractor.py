@@ -4,7 +4,6 @@ from dinotool.utils import frame_visualizer
 from dinotool.data import TransformFactory,FrameData, LocalFeatures
 from dinotool.model import load_model, DinoFeatureExtractor, PCAModule
 import tempfile
-from utils.visualization import create_video_from_frames
 from tqdm import tqdm
 import torch
 from utils.misc import setup_logger
@@ -131,12 +130,6 @@ class Extractor:
             filename = dir / f"{filename}.jpg"
             vis_img.save(filename)
 
-        create_video_from_frames(
-            str(dir),
-            outfile_path,
-            framerate= framerate
-        )
-       
 
 if __name__ == "__main__":
     # Example usage of the Extractor class
