@@ -96,12 +96,13 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
     left_image_stamps = [int(img.stem) for img in left_images]
     right_image_stamps = [int(img.stem) for img in right_images]
+    logger.info(f"Found {len(bin_files)} LiDAR files, {len(left_image_stamps)} left images, and {len(right_image_stamps)} right images.")
 
     # Load point clouds
     paired_samples = []
     for bin_file in tqdm.tqdm(bin_files[:100], desc="Loading point clouds", unit="file", leave=False): ##########################################
         point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
-
+        
         closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem))
         closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem))
         logger.info(f"Closest left image: {closest_left_image}, Closest right image: {closest_right_image}, Bin file: {bin_file.name}")
