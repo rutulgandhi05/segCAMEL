@@ -46,7 +46,7 @@ class HerculesDataset(Dataset):
             root_dir (str or Path): Dataset folder.
         """
         self.root_dir = Path(root_dir)
-        self.samples = load_hercules_dataset_folder(self.root_dir)
+        self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True)
         self.transform = transforms.Compose([
             transforms.PILToTensor(),
         ])
@@ -60,10 +60,11 @@ class HerculesDataset(Dataset):
         pointcloud = sample["pointcloud"]
         image_tensor = self.transform(image)
         image.close()
-
+        
         return {
             "pointcloud": pointcloud,
             "image_tensor": image_tensor,
             "timestamps": sample["timestamps"],
-            "intrinsics": sample["stereo_right_intrinsics"]
+            "intrinsics": sample["stereo_right_intrinsics"],
+            "extrinsics": sample["lidar_to_stereo_right_extrinsic"]
         }

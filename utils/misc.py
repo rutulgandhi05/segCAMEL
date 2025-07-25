@@ -2,6 +2,7 @@
 from bisect import bisect_left
 import logging
 import pandas as pd
+import torch
 
 def find_closest_stamp(stamps, target_stamp):
     """
@@ -52,3 +53,17 @@ def find_closest_cam_stamp_to_aeva(aeva_stamp: int, data_stamp: pd.DataFrame, se
     # Find the closest timestamp
     closest_row = sensor_df.iloc[(sensor_df[0] - aeva_stamp).abs().argsort()[:1]]
     return closest_row[0].values[0]
+
+
+def scale_intrinsics(K_orig: torch.Tensor, orig_size: tuple, new_size: tuple):
+    w_orig, h_orig = orig_size
+    w_new, h_new = new_size
+    scale_x = w_new / w_orig
+    scale_y = h_new / h_orig
+
+    K_new = K_orig.copy()
+    K_new[0, 0] *= scale_x   # fx
+    K_new[1, 1] *= scale_y   # fy
+    K_new[0, 2] *= scale_x   # cx
+    K_new[1, 2] *= scale_y   # cy
+    return K_new

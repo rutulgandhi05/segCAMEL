@@ -26,7 +26,9 @@ class LidarToImageProjector:
         cam_xyz = (self.T @ lidar_homo.T).T[:, :3]  # (N, 3)
 
         valid_mask = cam_xyz[:, 2] > 0  # only points in front of the camera
+        valid_mask = valid_mask.squeeze()
         cam_pts = cam_xyz[valid_mask]
+        cam_pts = cam_pts.cpu().numpy()
 
         pixel_coords = (self.K @ cam_pts.T).T  # (N_valid, 3)
         uvs = pixel_coords[:, :2] / pixel_coords[:, 2:3]
@@ -43,8 +45,8 @@ class LidarToImageProjector:
         j = np.clip((u / self.patch_w).astype(int), 0, self.feature_map_size[0] - 1)
         patch_idx = i * self.feature_map_size[0] + j
 
-        point_feats[valid_mask] = self.features[patch_idx]
-        return point_feats, valid_mask.astype(np.uint8)
+        point_feats[valid_mask] = self.features[patch_idx].squeeze()
+        return point_feats, valid_mask
 
 # Example usage
 def main():
@@ -53,6 +55,7 @@ def main():
     from scripts.feature_extractor import Extractor
     from PIL import Image
     from utils.visualization import visualize_pca_colored_pointcloud
+    from utils.misc import scale_intrinsics
     from pathlib import Path
 
     data = load_hercules_dataset_folder(Path("data/hercules/Mountain_01_Day"), return_all_fields=False)
@@ -61,22 +64,27 @@ def main():
     left_image_path = sample["right_image"]
     image = Image.open(left_image_path).convert("RGB")
     intrinsic = sample["stereo_right_intrinsics"]
+    print(f"Image size: {image.size}, Intrinsics: {intrinsic}")
     extrinsic = sample["lidar_to_stereo_right_extrinsic"]
 
     extractor = Extractor()
     res = extractor.extract_dino_features(image=image, filename="sample_image")
     feature_map_size = res['feature_map_size']
     patch_feats = res['features'].flat().tensor
-    image_size = res['input_size']
+    input_size = res['input_size']
 
     lidar_points = sample["pointcloud"]
 
+    intrinsic = scale_intrinsics(intrinsic, image.size, input_size)
+    print(f"Scaled Intrinsics: {intrinsic}")
     projector = LidarToImageProjector(
-        intrinsic, extrinsic, image_size, feature_map_size, patch_feats
+        intrinsic, extrinsic, input_size, feature_map_size, patch_feats
     )
     feats, mask = projector.assign_features(lidar_points)
-
-    np.savez("data/hercules/Mountain_01_Day/lidar_with_dino_features.npz", xyz=lidar_points, dino_feats=feats, visible=mask)
+    visualize_pca_colored_pointcloud(
+        lidar_points, feats, mask
+    )
+    #np.savez("data/hercules/Mountain_01_Day/lidar_with_dino_features.npz", xyz=lidar_points, dino_feats=feats, visible=mask)
 
 if __name__ == "__main__":
     main()

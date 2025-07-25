@@ -26,11 +26,11 @@ def distillation_loss(pred_feat, target_feat):
     return 1 - (pred * target).sum(dim=1).mean()
 
 def train(
-    data_dir=Path("data/scantinel/250612_RG_dynamic_test_drive/IN003_processed_pth"),
+    data_dir=Path("data/hercules/Mountain_01_Day/processed_data"),
     epochs=30,
     batch_size=1,
     lr=1e-4,
-    save_path=Path("data/checkpoints/best_model.pth"),
+    save_path=Path("data/checkpoints/best_model_hercules_exp_size100.pth"),
     device="cuda" if torch.cuda.is_available() else "cpu",
     input_mode="vri_dino",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
 ):
