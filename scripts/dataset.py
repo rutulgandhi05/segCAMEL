@@ -110,7 +110,9 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
             right_image = None
         if point_cloud is None:
             continue
-        
+        if left_image is None or right_image is None:
+            print(f"Skipping {bin_file.name} due to missing images.")
+            continue
         paired_samples.append({
             "pointcloud": point_cloud,
             "left_image": left_image,
