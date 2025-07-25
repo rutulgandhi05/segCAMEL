@@ -53,8 +53,9 @@ def main():
     from scripts.feature_extractor import Extractor
     from PIL import Image
     from utils.visualization import visualize_pca_colored_pointcloud
-    
-    data = load_hercules_dataset_folder("path/to/dataset", return_all_fields=False)
+    from pathlib import Path
+
+    data = load_hercules_dataset_folder(Path("data/hercules/Mountain_01_Day"), return_all_fields=False)
     sample = data[50]
 
     left_image_path = sample["left_image"]
