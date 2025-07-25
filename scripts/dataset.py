@@ -93,13 +93,15 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     bin_files = sorted(lidar_folder.glob("*.bin"))
     left_images = sorted(left_img_folder.glob("*.png")) if left_img_folder.exists() else []
     right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
+    left_image_stamps = [int(img.stem) for img in left_images]
+    right_image_stamps = [int(img.stem) for img in right_images]
 
     # Load point clouds
     paired_samples = []
-    for bin_file in tqdm.tqdm(bin_files, desc="Loading point clouds", unit="file", leave=False): ##########################################
+    for bin_file in tqdm.tqdm(bin_files[:100], desc="Loading point clouds", unit="file", leave=False): ##########################################
         point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
-        closest_left_image = find_closest_cam_stamp_to_aeva(int(bin_file.stem), data_stamp_df, sensor="stereo_left") if data_stamp_df is not None else None
-        closest_right_image = find_closest_cam_stamp_to_aeva(int(bin_file.stem), data_stamp_df, sensor="stereo_right") if data_stamp_df is not None else None
+        closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem))
+        closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem))
         if closest_left_image is not None:
             left_image = next((img for img in left_images if img.stem == str(closest_left_image)), None)
         else:
