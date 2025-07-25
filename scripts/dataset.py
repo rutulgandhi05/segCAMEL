@@ -1,14 +1,15 @@
-from pathlib import Path
-import numpy as np
-import yaml
-from PIL import Image
-from hercules.aeva import load_aeva_bin
-import tqdm
 import io
-from utils.files import read_mcap_file
-from utils.misc import find_closest_stamp, find_closest_cam_stamp_to_aeva
-from scantinel.parse_mcap_pcl import parse_pcl
+import tqdm
+import numpy as np
 import pandas as pd
+from pathlib import Path
+from hercules.aeva import load_aeva_bin
+from utils.files import read_mcap_file
+from scantinel.parse_mcap_pcl import parse_pcl
+from utils.misc import find_closest_stamp, find_closest_cam_stamp_to_aeva, setup_logger
+
+logger = setup_logger("dataset")
+
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     """
@@ -103,7 +104,8 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
 
         closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem))
         closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem))
-        print(f"Closest left image: {closest_left_image}, Closest right image: {closest_right_image}, Bin file: {bin_file.name}")
+        logger.info(f"Closest left image: {closest_left_image}, Closest right image: {closest_right_image}, Bin file: {bin_file.name}")
+        
         if closest_left_image is not None:
             left_image = next((img for img in left_images if img.stem == str(closest_left_image)), None)
         else:
@@ -115,7 +117,7 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
         if point_cloud is None:
             continue
         if left_image is None or right_image is None:
-            print(f"Skipping {bin_file.name} due to missing images.")
+            logger.warning(f"Skipping {bin_file.name} due to missing images.")
             continue
         paired_samples.append({
             "pointcloud": point_cloud,

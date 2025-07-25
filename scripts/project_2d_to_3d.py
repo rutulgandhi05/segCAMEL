@@ -58,11 +58,11 @@ def main():
     data = load_hercules_dataset_folder(Path("data/hercules/Mountain_01_Day"), return_all_fields=False)
     sample = data[50]
 
-    left_image_path = sample["left_image"]
+    left_image_path = sample["right_image"]
     image = Image.open(left_image_path).convert("RGB")
-    intrinsic = sample["stereo_left_intrinsics"]
-    extrinsic = sample["lidar_to_stereo_left_extrinsic"]
-    
+    intrinsic = sample["stereo_right_intrinsics"]
+    extrinsic = sample["lidar_to_stereo_right_extrinsic"]
+
     extractor = Extractor()
     res = extractor.extract_dino_features(image=image, filename="sample_image")
     feature_map_size = res['feature_map_size']
