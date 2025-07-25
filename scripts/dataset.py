@@ -100,8 +100,10 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     paired_samples = []
     for bin_file in tqdm.tqdm(bin_files[:100], desc="Loading point clouds", unit="file", leave=False): ##########################################
         point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
+
         closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem))
         closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem))
+        print(f"Closest left image: {closest_left_image}, Closest right image: {closest_right_image}, Bin file: {bin_file.name}")
         if closest_left_image is not None:
             left_image = next((img for img in left_images if img.stem == str(closest_left_image)), None)
         else:
