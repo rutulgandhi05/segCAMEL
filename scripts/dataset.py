@@ -6,9 +6,7 @@ from pathlib import Path
 from hercules.aeva import load_aeva_bin
 from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
-from utils.misc import find_closest_stamp, find_closest_cam_stamp_to_aeva, setup_logger
-
-logger = setup_logger("dataset")
+from utils.misc import find_closest_stamp
 
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
@@ -96,17 +94,16 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
     left_image_stamps = [int(img.stem) for img in left_images]
     right_image_stamps = [int(img.stem) for img in right_images]
-    logger.info(f"Found {len(bin_files)} LiDAR files, {len(left_image_stamps)} left images, and {len(right_image_stamps)} right images.")
+    print(f"Found {len(bin_files)} LiDAR files, {len(left_image_stamps)} left images, and {len(right_image_stamps)} right images.")
 
     # Load point clouds
     paired_samples = []
     for bin_file in tqdm.tqdm(bin_files[:100], desc="Loading point clouds", unit="file", leave=False): ##########################################
         point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
         
-        closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem))
-        closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem))
-        logger.info(f"Closest left image: {closest_left_image}, Closest right image: {closest_right_image}, Bin file: {bin_file.name}")
-        
+        closest_left_image = find_closest_stamp(left_image_stamps, int(bin_file.stem)) if left_image_stamps else None
+        closest_right_image = find_closest_stamp(right_image_stamps, int(bin_file.stem)) if right_image_stamps else None
+
         if closest_left_image is not None:
             left_image = next((img for img in left_images if img.stem == str(closest_left_image)), None)
         else:
@@ -118,7 +115,7 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
         if point_cloud is None:
             continue
         if left_image is None or right_image is None:
-            logger.warning(f"Skipping {bin_file.name} due to missing images.")
+            print(f"Skipping {bin_file.name} due to missing images.")
             continue
         paired_samples.append({
             "pointcloud": point_cloud,
@@ -189,23 +186,6 @@ def load_scantinel_dataset_folder(dataset_folder: Path):
 
 
 if __name__ == "__main__":
-    from datetime import datetime
-    hercules_f = Path("data/raw/dataset1")
+    hercules_f = Path("data/hercules/Mountain_01_Day")
 
     data = load_hercules_dataset_folder(hercules_f, return_all_fields=True)
-
-    x = [datetime.fromtimestamp(int(pcl.stem)/1000000000) for pcl in data["point_cloud_paths"]][:50]
-    y = [datetime.fromtimestamp(int(img.stem)/1000000000) for img in data["stereo_left_images"][:len(x)]]
-
-    from matplotlib import pyplot as plt
-
-    # compare timestamps
-    plt.figure(figsize=(10, 5))
-    plt.plot(x, np.zeros_like(x), 'ro', label='LiDAR Timestamps')
-    plt.plot(y, np.ones_like(y), 'bo', label='Camera Timestamps')
-    plt.xlabel('Timestamp')
-    plt.yticks([0, 1], ['LiDAR', 'Camera'])
-    plt.title('LiDAR and Camera Timestamps Comparison')
-    plt.legend()
-    plt.grid()
-    plt.show()
