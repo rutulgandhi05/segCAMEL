@@ -26,9 +26,7 @@ class LidarToImageProjector:
         cam_xyz = (self.T @ lidar_homo.T).T[:, :3]  # (N, 3)
 
         valid_mask = cam_xyz[:, 2] > 0  # only points in front of the camera
-        valid_mask = valid_mask.squeeze()
         cam_pts = cam_xyz[valid_mask]
-        cam_pts = cam_pts.cpu().numpy()
 
         pixel_coords = (self.K @ cam_pts.T).T  # (N_valid, 3)
         uvs = pixel_coords[:, :2] / pixel_coords[:, 2:3]
@@ -45,8 +43,8 @@ class LidarToImageProjector:
         j = np.clip((u / self.patch_w).astype(int), 0, self.feature_map_size[0] - 1)
         patch_idx = i * self.feature_map_size[0] + j
 
-        point_feats[valid_mask] = self.features[patch_idx].squeeze()
-        return point_feats, valid_mask
+        point_feats[valid_mask] = self.features[patch_idx]
+        return point_feats, valid_mask.astype(np.uint8)
 
 # Example usage
 def main():
@@ -64,7 +62,7 @@ def main():
     left_image_path = sample["right_image"]
     image = Image.open(left_image_path).convert("RGB")
     intrinsic = sample["stereo_right_intrinsics"]
-    print(f"Image size: {image.size}, Intrinsics: {intrinsic}")
+    print(f"Image size: {image.size}, Intrinsics: {type(intrinsic)}")
     extrinsic = sample["lidar_to_stereo_right_extrinsic"]
 
     extractor = Extractor()

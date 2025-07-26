@@ -29,40 +29,51 @@ def preprocess_and_save_hercules(
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     extractor = Extractor()
-    dino_patch = extractor.model.patch_size
-
-    logger.info(f"DINO patch: {dino_patch}")
+    logger.info(f"Using DINO model: {extractor.dino_model}")
 
     for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
+
         image_tensor = batch["image_tensor"][0]
         pil_img = ToPILImage()(image_tensor).convert("RGB")
-
+    
         features = extractor.extract_dino_features(image=pil_img, filename=f"frame_{idx:05d}")
+        pil_img.close()  # Close the PIL image to free resources
         dino_feat_tensor = features["features"].flat().tensor
+        input_size = features["input_size"]
+        feature_map_size = features["feature_map_size"]
 
         # ======= Pointcloud Handling =======
-        pointcloud = batch["pointcloud"][0]  # shape should be [N, C] already
+        pointcloud = batch["pointcloud"]  # shape should be [N, C] already
         if isinstance(pointcloud, torch.Tensor):
-            pointcloud = pointcloud.numpy()
-
+            pointcloud = pointcloud.squeeze().numpy()
         if pointcloud.ndim == 3 and pointcloud.shape[0] == 1:
             pointcloud = pointcloud.squeeze(0)  # now shape [N, C]
 
         lidar_xyz = pointcloud[:, :3]
-        lidar_feats = pointcloud[:, 3:]
+        lidar_feats = pointcloud[:, 3:] if pointcloud.shape[1] > 3 else np.zeros((lidar_xyz.shape[0], 1), dtype=np.float32)
 
         # ======= Intrinsics Handling =======
         intrinsics = batch["intrinsics"]
+        intrinsics = scale_intrinsics(intrinsics, pil_img.size, input_size)
         if isinstance(intrinsics, torch.Tensor):
             intrinsics = intrinsics.squeeze().numpy()
-        intrinsics = scale_intrinsics(intrinsics, pil_img.size, features["input_size"])
+        elif isinstance(intrinsics, np.ndarray):
+            intrinsics = intrinsics.squeeze()
+        
+        extrinsics = batch["extrinsics"]
+        if isinstance(extrinsics, torch.Tensor):
+            extrinsics = extrinsics.squeeze().numpy()
+        elif isinstance(extrinsics, np.ndarray):
+            extrinsics = extrinsics.squeeze()
 
+        #print(type(intrinsics), type(extrinsics), type(dino_feat_tensor), type(features["input_size"]))
+        
         # ======= Projector & Feature Assignment =======
         projector = LidarToImageProjector(
             intrinsic=intrinsics,
-            extrinsic=batch["extrinsics"],
-            image_size=features["input_size"],
-            feature_map_size=features["feature_map_size"],
+            extrinsic=extrinsics,
+            image_size=input_size,
+            feature_map_size=feature_map_size,
             patch_features=dino_feat_tensor
         )
         assigned_feats, mask = projector.assign_features(lidar_xyz=lidar_xyz)

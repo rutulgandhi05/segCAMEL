@@ -61,7 +61,7 @@ def scale_intrinsics(K_orig: torch.Tensor, orig_size: tuple, new_size: tuple):
     scale_x = w_new / w_orig
     scale_y = h_new / h_orig
 
-    K_new = K_orig.copy()
+    K_new = K_orig.squeeze().clone()
     K_new[0, 0] *= scale_x   # fx
     K_new[1, 1] *= scale_y   # fy
     K_new[0, 2] *= scale_x   # cx

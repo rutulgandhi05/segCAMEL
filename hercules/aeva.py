@@ -118,10 +118,21 @@ def load_aeva_bin(bin_path, return_all_fields=False):
     for k in all_fields:
         all_fields[k] = np.array(all_fields[k], dtype=np.float32 if k != 'time_offset_ns' and k != 'line_index' else np.int32)
     
-    xyz = np.stack([all_fields['x'], all_fields['y'], all_fields['z']], axis=1)
+    all_fields = np.stack([all_fields['x'], 
+                           all_fields['y'], 
+                           all_fields['z'], 
+                           all_fields['reflectivity'], 
+                           all_fields['velocity']], 
+                           axis=1) if  "intensity" not in field_names else np.stack([all_fields['x'], 
+                                                                                     all_fields['y'], 
+                                                                                     all_fields['z'], 
+                                                                                     all_fields['reflectivity'], 
+                                                                                     all_fields['velocity'], 
+                                                                                     all_fields['intensity']], 
+                                                                                     axis=1)
     if return_all_fields:
-        return xyz, all_fields
-    return xyz
+        return all_fields
+    return np.stack([all_fields['x'], all_fields['y'], all_fields['z']], axis=1)
 
 def test():
     # Example usage
