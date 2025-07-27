@@ -1,124 +1,97 @@
-import argparse
-from pathlib import Path
-
 import torch
-from torch.utils.data import DataLoader
-from sklearn.cluster import KMeans
+from pathlib import Path
+from models.PTv3.model import PointTransformerV3
 
-from scripts.train import MyPointCloudDataset, collate_fn, SegmentationNet
-from utils.visualization import PointCloudVisualizer
+def save_predicted_features_to_pth(
+    model_ckpt_path="data/checkpoints/best_model_hercules_exp_size100.pth",
+    data_pth="data/hercules/Mountain_01_Day/processed_data/frame_00000.pth",
+    input_mode="dino_only",
+    output_key="distilled_feat",
+    output_dir=None,
+    device="cuda" if torch.cuda.is_available() else "cpu"
+):
+    # --- Load checkpoint ---
+    ckpt = torch.load(model_ckpt_path, map_location=device)
+    data = torch.load(data_pth)
+    coord = data["coord"]
+    feat = data["feat"]
+    dino_feat = data["dino_feat"]
 
+    if coord.dim() == 3 and coord.shape[0] == 1:
+        coord = coord.squeeze(0)
+        feat = feat.squeeze(0)
+        dino_feat = dino_feat.squeeze(0)
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run inference with a trained segCAMEL model")
-    parser.add_argument(
-        "--data-root",
-        type=str,
-        required=True,
-        help="Path to processed dataset directory (containing train/ or val/)",
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        default="val",
-        choices=["train", "val"],
-        help="Dataset split to run inference on",
-    )
-    parser.add_argument(
-        "--ckpt",
-        type=str,
-        default=None,
-        help="Path to model checkpoint (.pth). Defaults to <data-root>/best_unsupervised_model.pth",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=str,
-        default=None,
-        help="Optional directory to save visualizations and features",
-    )
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument(
-        "--num-clusters",
-        type=int,
-        default=6,
-        help="Number of clusters for unsupervised segmentation",
-    )
-    parser.add_argument(
-        "--open3d",
-        action="store_true",
-        help="Use Open3D for interactive visualization instead of Matplotlib",
-    )
-    return parser.parse_args()
+    input_dim = dino_feat.shape[1] if input_mode == "dino_only" else feat.shape[1] + dino_feat.shape[1]
+    dino_dim = dino_feat.shape[1]
 
+    model = PointTransformerV3(in_channels=input_dim).to(device)
+    proj_head = torch.nn.Linear(64, dino_dim).to(device)  # 64=backbone's output channel
 
-def main():
-    args = parse_args()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    root_dir = Path(args.data_root)
-    ckpt_path = Path(args.ckpt) if args.ckpt is not None else root_dir / "best_unsupervised_model.pth"
-
-    dataset = MyPointCloudDataset(root_dir, split=args.split)
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        collate_fn=collate_fn,
-    )
-
-    if len(dataset) == 0:
-        raise RuntimeError(f"No samples found in {root_dir / args.split}")
-
-    sample = dataset[0]
-    model = SegmentationNet(
-        in_channels=sample["feat"].shape[1],
-        dino_channels=sample["dino_feat"].shape[1],
-        num_classes=6,
-    ).to(device)
-
-    state = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(state)
+    model.load_state_dict(ckpt["model"])
+    proj_head.load_state_dict(ckpt["proj_head"])
     model.eval()
+    proj_head.eval()
+    
+    # --- Prepare input ---
+    coord = coord.to(device)
+    feat = feat.to(device)
 
-    viz = PointCloudVisualizer()
-    out_root = Path(args.out_dir) if args.out_dir else None
-    if out_root is not None:
-        out_root.mkdir(parents=True, exist_ok=True)
+    if input_mode == "dino_only":
+        input_feat = dino_feat.to(device)
+    elif input_mode == "vri_dino":
+        input_feat = torch.cat([feat, dino_feat], dim=1)
+    elif input_mode == "coord_dino":
+        input_feat = torch.cat([coord, dino_feat], dim=1)
+    elif input_mode == "coord_vri_dino":
+        input_feat = torch.cat([coord, feat, dino_feat], dim=1)
+    else:
+        raise ValueError(f"Unknown input_mode: {input_mode}")
+    
+    grid_size = float(data.get("grid_size", 0.05))
+    coord_min = coord.min(0)[0]
+    grid_coord = ((coord - coord_min) / grid_size).floor().int()
 
+    for axis in range(3):
+        n_unique = len(torch.unique(grid_coord[:, axis]))
+        if n_unique < 2:
+            grid_coord[:, axis] += torch.arange(grid_coord.shape[0]) % 2
+    num_points = coord.shape[0]
+
+    batch = torch.zeros(num_points, dtype=torch.long, device=device)
+    offset = torch.tensor([num_points], dtype=torch.long, device=device)
+
+    data_dict = {
+        "coord": coord,
+        "feat": input_feat,
+        "grid_coord": grid_coord,
+        "grid_size": grid_size,
+        "offset": offset,
+        "batch": batch,
+    }
+
+    # --- Inference ---
     with torch.no_grad():
-        for idx, (data_dict, _) in enumerate(loader):
-            for key in ("coord", "feat", "dino_feat", "offset"):
-                data_dict[key] = data_dict[key].to(device)
+        output = model(data_dict)
+        pred = output.feat
+        pred_proj = proj_head(pred)  # shape: (N, dino_dim)
+        # Save as torch.Tensor (not numpy)
+        distilled_feat = pred_proj.cpu()
 
-            out_point = model.backbone(data_dict)
-            feats = out_point.feat.cpu().numpy()
+    # --- Save as new .pth ---
+    if output_dir is None:
+        output_dir = str(Path(data_pth).parent)
 
-            # Unsupervised segmentation via KMeans on predicted features
-            kmeans = KMeans(n_clusters=args.num_clusters, n_init=10)
-            cluster_labels = kmeans.fit_predict(feats)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-            coords_np = data_dict["coord"].cpu().numpy()
+    base_name = Path(data_pth).stem
+    pth_path = output_dir / f"{base_name}_distilled.pth"
 
-            if out_root is not None:
-                torch.save(torch.from_numpy(feats), out_root / f"feats_{idx:04d}.pt")
-
-                save_path = out_root / f"seg_{idx:04d}.png"
-                viz.show_gt_pred(
-                    coords_np,
-                    pred_labels=cluster_labels,
-                    save_prefix=str(save_path.with_suffix("")),
-                    use_open3d=args.open3d,
-                )
-            else:
-                viz.show_gt_pred(
-                    coords_np,
-                    pred_labels=cluster_labels,
-                    use_open3d=args.open3d,
-                )
-
+    data[output_key] = distilled_feat
+    
+    torch.save(data, pth_path)
+    print(f"Saved .pth with distilled features to {pth_path}")
 
 if __name__ == "__main__":
-    main()
+    save_predicted_features_to_pth()
