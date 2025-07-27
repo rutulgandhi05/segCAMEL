@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from models.PTv3.model import PointTransformerV3
 
-
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
         self.files = sorted(list(Path(root_dir).glob("*.pth")))
@@ -27,9 +26,9 @@ def distillation_loss(pred_feat, target_feat):
 
 def train(
     data_dir=Path("data/hercules/Mountain_01_Day/processed_data"),
-    epochs=30,
+    epochs=20,
     batch_size=1,
-    lr=1e-4,
+    lr=1e-3,
     save_path=Path("data/checkpoints/best_model_hercules_exp_size100.pth"),
     device="cuda" if torch.cuda.is_available() else "cpu",
     input_mode="vri_dino",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
@@ -72,73 +71,21 @@ def train(
         total_loss = 0
         logger.info(f"\nEpoch {epoch + 1}/{epochs}")
 
-        for batch_idx, sample in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
+        for batch_idx, batch_sample in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
+                # Unpack batch_sample: if batch_size=1, it's a list of one dict
+                if isinstance(batch_sample, list):
+                    sample = batch_sample[0]
+                else:
+                    sample = batch_sample
+
                 # Move all tensors to device
                 coord = sample["coord"].to(device)
                 feat = sample["feat"].to(device)
                 dino_feat = sample["dino_feat"].to(device)
-                grid_size = sample["grid_size"].to(device)
+                grid_size = sample["grid_size"] if isinstance(sample["grid_size"], float) else sample["grid_size"].item()
 
-                # Handle batch dimension - if batch_size=1, we need to handle single samples
-                if coord.dim() == 2:  # [N, 3] -> need to add batch info
-                    batch_size_actual = 1
-                    num_points = coord.shape[0]
-                    
-                    # Create batch indices (all points belong to batch 0)
-                    batch = torch.zeros(num_points, dtype=torch.long, device=device)
-                    offset = torch.tensor([num_points], dtype=torch.long, device=device)
-                else:  # Already batched
-                    batch_size_actual = coord.shape[0]
-                    # Handle batched data - flatten if needed
-                    if coord.dim() == 3:
-                        coord = coord.view(-1, coord.shape[-1])
-                        feat = feat.view(-1, feat.shape[-1])
-                        dino_feat = dino_feat.view(-1, dino_feat.shape[-1])
-                    
-                    num_points = coord.shape[0]
-                    batch = torch.arange(batch_size_actual, device=device).repeat_interleave(num_points // batch_size_actual)
-                    offset = torch.tensor([num_points], dtype=torch.long, device=device)
-
-                # Generate grid coordinates with proper scaling
-                if isinstance(grid_size, torch.Tensor) and grid_size.dim() == 0:
-                    grid_size_val = grid_size.item()
-                else:
-                    grid_size_val = grid_size
-                
-                # Use a reasonable grid size - too small grid sizes cause huge coordinate values
-                # Clamp grid size to be at least 0.01 (1cm) to avoid huge grid coordinates
-                min_grid_size = 0.01
-                if grid_size_val < min_grid_size:
-                    logger.warning(f"Grid size {grid_size_val} too small, using {min_grid_size}")
-                    grid_size_val = min_grid_size
-                
-                # Create grid coordinates by quantizing the original coordinates
-                coord_min = coord.min(0)[0]
-                coord_max = coord.max(0)[0]
-                coord_range = coord_max - coord_min
-                
-                # Ensure the quantized coordinates don't exceed reasonable bounds
-                grid_coord = torch.div(
-                    coord - coord_min, 
-                    grid_size_val, 
-                    rounding_mode="trunc"
-                ).int()
-                
-                # Check if grid coordinates are within reasonable bounds (< 2^16 for each dimension)
-                max_grid_coord = grid_coord.max()
-                if max_grid_coord >= 2**15:  # Keep some safety margin
-                    # Rescale grid size to keep coordinates reasonable
-                    new_grid_size = float(coord_range.max()) / (2**14)  # Use 2^14 as max coordinate
-                    logger.warning(f"Grid coordinates too large ({max_grid_coord}), rescaling grid size from {grid_size_val} to {new_grid_size}")
-                    grid_size_val = new_grid_size
-                    grid_coord = torch.div(
-                        coord - coord_min, 
-                        grid_size_val, 
-                        rounding_mode="trunc"
-                    ).int()
-
-                # -- Select features based on input_mode --
+                # Input features selection
                 if input_mode == "dino_only":
                     input_feat = dino_feat
                 elif input_mode == "vri_dino":
@@ -150,7 +97,22 @@ def train(
                 else:
                     raise ValueError(f"Unknown input_mode: {input_mode}")
 
-                # Prepare data dictionary for the model
+                # Grid quantization for sparse convolution
+                min_grid_size = 0.01
+                grid_size_val = max(grid_size, min_grid_size)
+                coord_min = coord.min(0)[0]
+                grid_coord = torch.div(
+                    coord - coord_min,
+                    grid_size_val,
+                    rounding_mode="trunc"
+                ).int()
+
+                # Offset and batch
+                num_points = coord.shape[0]
+                batch = torch.zeros(num_points, dtype=torch.long, device=device)
+                offset = torch.tensor([num_points], dtype=torch.long, device=device)
+
+                # Prepare data dict for model
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
@@ -164,7 +126,6 @@ def train(
                 if epoch == 0 and batch_idx == 0:
                     logger.info(f"Grid size used: {grid_size_val}")
                     logger.info(f"Coord shape: {coord.shape}")
-                    logger.info(f"Coord range: {coord_min} to {coord_max}")
                     logger.info(f"Input feat shape: {input_feat.shape}")
                     logger.info(f"Grid coord shape: {grid_coord.shape}")
                     logger.info(f"Grid coord range: {grid_coord.min()} to {grid_coord.max()}")
@@ -175,7 +136,7 @@ def train(
                 optimizer.zero_grad()
                 output = model(data_dict)
                 pred = output.feat
-                
+
                 # Compute loss
                 loss = distillation_loss(pred, dino_feat)
                 loss.backward()
@@ -206,4 +167,4 @@ if __name__ == "__main__":
     train(input_mode="dino_only")
     # train(input_mode="vri_dino")
     # train(input_mode="coord_dino")
-    # train(input_mode="coord_vri_dino")
+    # train(input_mode="coord_vri_dino"
