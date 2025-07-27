@@ -29,7 +29,7 @@ def preprocess_and_save_hercules(
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     extractor = Extractor()
-    logger.info(f"Using DINO model: {extractor.dino_model}")
+    print(f"Using DINO model: {extractor.dino_model}")
 
     for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
 
@@ -96,10 +96,18 @@ def preprocess_and_save_hercules(
         }
         save_path = save_dir / f"frame_{idx:05d}.pth"
         torch.save(save_data, save_path)
-        logger.info(f"[Saved] {save_path}")
+        print(f"[Saved] {save_path}")
 
 
 if __name__ == "__main__":
+    import time
+
+    start_time = time.time()
+    print("Starting preprocessing...")
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
     HERCULES_ROOT_DIR = "data/hercules/Mountain_01_Day/"
     HERCULES_SAVE_DIR = "data/hercules/Mountain_01_Day/processed_data"
     preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR)
+    end_time = time.time()
+    print("Preprocessing completed.")
+    print(f"Total time taken: {end_time - start_time:.2f} seconds")
