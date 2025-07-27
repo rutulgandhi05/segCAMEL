@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH -J SegCAMEL
-#SBATCH -o train_output.txt
-#SBATCH -e train_error.txt
+#SBATCH -o inference_output.txt
+#SBATCH -e inference_error.txt
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1
