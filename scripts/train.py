@@ -23,6 +23,18 @@ def distillation_loss(pred_feat, target_feat):
     target = F.normalize(target_feat, dim=1)
     return 1 - (pred * target).sum(dim=1).mean()
 
+def safe_grid_coord(coord, grid_size, logger=None):
+    coord_min = coord.min(0)[0]
+    grid_coord = ((coord - coord_min) / grid_size).floor().int()
+    # Ensure at least two unique values per axis for Hilbert code
+    for axis in range(3):
+        n_unique = len(torch.unique(grid_coord[:, axis]))
+        if n_unique < 2:
+            if logger:
+                logger.warning(f"Axis {axis} of grid_coord has only {n_unique} unique value! Forcing two values.")
+            grid_coord[:, axis] += torch.arange(grid_coord.shape[0]) % 2
+    return grid_coord
+
 def train(
     data_dir=Path("data/hercules/Mountain_01_Day/processed_data"),
     epochs=20,
@@ -47,6 +59,12 @@ def train(
     coord = sample["coord"]
     feat = sample["feat"]
     dino_feat = sample["dino_feat"]
+
+    # Squeeze singleton batch dimension if present
+    if coord.dim() == 3 and coord.shape[0] == 1:
+        coord = coord.squeeze(0)
+        feat = feat.squeeze(0)
+        dino_feat = dino_feat.squeeze(0)
 
     # Build input_feat as will be used in training
     if input_mode == "dino_only":
@@ -80,10 +98,18 @@ def train(
                 else:
                     sample = batch_sample
 
-                # Move all tensors to device
-                coord = sample["coord"].to(device)
-                feat = sample["feat"].to(device)
-                dino_feat = sample["dino_feat"].to(device)
+                coord = sample["coord"]
+                feat = sample["feat"]
+                dino_feat = sample["dino_feat"]
+
+                if coord.dim() == 3 and coord.shape[0] == 1:
+                    coord = coord.squeeze(0)
+                    feat = feat.squeeze(0)
+                    dino_feat = dino_feat.squeeze(0)
+
+                coord = coord.to(device)
+                feat = feat.to(device)
+                dino_feat = dino_feat.to(device)
 
                 # --- Robust grid size for outdoor LiDAR ---
                 default_grid_size = 0.05  # 5 cm
@@ -91,15 +117,14 @@ def train(
                 if not (0.01 <= grid_size <= 1.0):
                     grid_size = default_grid_size
 
-                # Quantize coordinates
-                coord_min = coord.min(0)[0]
-                grid_coord = ((coord - coord_min) / grid_size).floor().int()
+                # Quantize coordinates, robust to degenerate input
+                grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-                # Ensure grid_coord does not overflow int16
+                # If overflow, auto-coarsen grid_size
                 if grid_coord.max() > 2**15:
                     logger.warning(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
                     grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
-                    grid_coord = ((coord - coord_min) / grid_size).floor().int()
+                    grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
                 # Batch and offset arrays for single-frame (batch_size=1)
                 num_points = coord.shape[0]
