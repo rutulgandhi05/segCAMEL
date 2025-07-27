@@ -36,6 +36,7 @@ def save_predicted_features_to_pth(
     # --- Prepare input ---
     coord = coord.to(device)
     feat = feat.to(device)
+    dino_feat = dino_feat.to(device)
 
     if input_mode == "dino_only":
         input_feat = dino_feat.to(device)
@@ -48,16 +49,26 @@ def save_predicted_features_to_pth(
     else:
         raise ValueError(f"Unknown input_mode: {input_mode}")
     
-    grid_size = float(data.get("grid_size", 0.05))
+    # --- Grid quantization: match training logic exactly ---
+    default_grid_size = 0.05
+    grid_size = float(data.get("grid_size", default_grid_size))
+    if not (0.01 <= grid_size <= 1.0):
+        grid_size = default_grid_size
+
     coord_min = coord.min(0)[0]
     grid_coord = ((coord - coord_min) / grid_size).floor().int()
+
+    if grid_coord.max() > 2**15:
+        print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
+        grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
+        grid_coord = ((coord - coord_min) / grid_size).floor().int()
 
     for axis in range(3):
         n_unique = len(torch.unique(grid_coord[:, axis]))
         if n_unique < 2:
             grid_coord[:, axis] += torch.arange(grid_coord.shape[0]) % 2
+    
     num_points = coord.shape[0]
-
     batch = torch.zeros(num_points, dtype=torch.long, device=device)
     offset = torch.tensor([num_points], dtype=torch.long, device=device)
 
