@@ -1,12 +1,11 @@
 from pathlib import Path
-from datetime import datetime
-from utils.misc import setup_logger
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models.PTv3.model import PointTransformerV3
+from utils.misc import setup_logger
 
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
@@ -43,23 +42,25 @@ def train(
 
     logger.info(f"Loaded {len(dataset)} preprocessed samples")
 
-    # -- Dynamically infer in_channels from first sample --
+    # --- Infer input_dim robustly based on input_mode and first sample
     sample = dataset[0]
     coord = sample["coord"]
     feat = sample["feat"]
     dino_feat = sample["dino_feat"]
 
+    # Build input_feat as will be used in training
     if input_mode == "dino_only":
-        input_dim = dino_feat.shape[1]
+        input_feat = dino_feat
     elif input_mode == "vri_dino":
-        input_dim = feat.shape[1] + dino_feat.shape[1]
+        input_feat = torch.cat([feat, dino_feat], dim=1)
     elif input_mode == "coord_dino":
-        input_dim = coord.shape[1] + dino_feat.shape[1]
+        input_feat = torch.cat([coord, dino_feat], dim=1)
     elif input_mode == "coord_vri_dino":
-        input_dim = coord.shape[1] + feat.shape[1] + dino_feat.shape[1]
+        input_feat = torch.cat([coord, feat, dino_feat], dim=1)
     else:
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
+    input_dim = input_feat.shape[1]
     logger.info(f"Using input_dim={input_dim}")
     model = PointTransformerV3(in_channels=input_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -83,9 +84,29 @@ def train(
                 coord = sample["coord"].to(device)
                 feat = sample["feat"].to(device)
                 dino_feat = sample["dino_feat"].to(device)
-                grid_size = sample["grid_size"] if isinstance(sample["grid_size"], float) else sample["grid_size"].item()
 
-                # Input features selection
+                # --- Robust grid size for outdoor LiDAR ---
+                default_grid_size = 0.05  # 5 cm
+                grid_size = float(sample.get("grid_size", default_grid_size))
+                if not (0.01 <= grid_size <= 1.0):
+                    grid_size = default_grid_size
+
+                # Quantize coordinates
+                coord_min = coord.min(0)[0]
+                grid_coord = ((coord - coord_min) / grid_size).floor().int()
+
+                # Ensure grid_coord does not overflow int16
+                if grid_coord.max() > 2**15:
+                    logger.warning(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
+                    grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
+                    grid_coord = ((coord - coord_min) / grid_size).floor().int()
+
+                # Batch and offset arrays for single-frame (batch_size=1)
+                num_points = coord.shape[0]
+                batch = torch.zeros(num_points, dtype=torch.long, device=device)
+                offset = torch.tensor([num_points], dtype=torch.long, device=device)
+
+                # Build input features
                 if input_mode == "dino_only":
                     input_feat = dino_feat
                 elif input_mode == "vri_dino":
@@ -97,34 +118,19 @@ def train(
                 else:
                     raise ValueError(f"Unknown input_mode: {input_mode}")
 
-                # Grid quantization for sparse convolution
-                min_grid_size = 0.01
-                grid_size_val = max(grid_size, min_grid_size)
-                coord_min = coord.min(0)[0]
-                grid_coord = torch.div(
-                    coord - coord_min,
-                    grid_size_val,
-                    rounding_mode="trunc"
-                ).int()
-
-                # Offset and batch
-                num_points = coord.shape[0]
-                batch = torch.zeros(num_points, dtype=torch.long, device=device)
-                offset = torch.tensor([num_points], dtype=torch.long, device=device)
-
-                # Prepare data dict for model
+                # Model input
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
                     "grid_coord": grid_coord,
-                    "grid_size": grid_size_val,
+                    "grid_size": grid_size,
                     "offset": offset,
                     "batch": batch,
                 }
 
-                # Debug info (only for first batch of first epoch)
+                # Debug info (first batch, first epoch)
                 if epoch == 0 and batch_idx == 0:
-                    logger.info(f"Grid size used: {grid_size_val}")
+                    logger.info(f"Grid size used: {grid_size}")
                     logger.info(f"Coord shape: {coord.shape}")
                     logger.info(f"Input feat shape: {input_feat.shape}")
                     logger.info(f"Grid coord shape: {grid_coord.shape}")
@@ -167,4 +173,4 @@ if __name__ == "__main__":
     train(input_mode="dino_only")
     # train(input_mode="vri_dino")
     # train(input_mode="coord_dino")
-    # train(input_mode="coord_vri_dino"
+    # train(input_mode="coord_vri_dino")
