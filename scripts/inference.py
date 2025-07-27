@@ -7,7 +7,7 @@ def save_predicted_features_to_pth(
     data_pth="data/hercules/Mountain_01_Day/processed_data/frame_00000.pth",
     input_mode="dino_only",
     output_key="distilled_feat",
-    output_dir=None,
+    output_dir="data/checkpoints/hercules_exp_size100_inference",
     device="cuda" if torch.cuda.is_available() else "cpu"
 ):
     # --- Load checkpoint ---
@@ -89,7 +89,7 @@ def save_predicted_features_to_pth(
     pth_path = output_dir / f"{base_name}_distilled.pth"
 
     data[output_key] = distilled_feat
-    
+
     torch.save(data, pth_path)
     print(f"Saved .pth with distilled features to {pth_path}")
 
