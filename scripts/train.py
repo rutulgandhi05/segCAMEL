@@ -42,7 +42,7 @@ def train(
     lr=1e-3,
     save_path=Path("data/checkpoints/best_model_hercules_exp_size100.pth"),
     device="cuda" if torch.cuda.is_available() else "cpu",
-    input_mode="vri_dino",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
+    input_mode="dino_only",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
 ):
     logger = setup_logger()
     logger.info(f"Starting training on device: {device}")
@@ -66,7 +66,6 @@ def train(
         feat = feat.squeeze(0)
         dino_feat = dino_feat.squeeze(0)
 
-    # Build input_feat as will be used in training
     if input_mode == "dino_only":
         input_feat = dino_feat
     elif input_mode == "vri_dino":
@@ -79,21 +78,25 @@ def train(
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
     input_dim = input_feat.shape[1]
-    logger.info(f"Using input_dim={input_dim}")
+    dino_dim = dino_feat.shape[1]
+    logger.info(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
     model = PointTransformerV3(in_channels=input_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
+
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
 
     best_loss = float("inf")
 
     for epoch in range(epochs):
         model.train()
+        proj_head.train()
         total_loss = 0
         logger.info(f"\nEpoch {epoch + 1}/{epochs}")
 
         for batch_idx, batch_sample in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
-                # Unpack batch_sample: if batch_size=1, it's a list of one dict
-                if isinstance(batch_sample, list):
+                # Unpack and squeeze batch_sample if needed
+                if isinstance(batch_sample, list) or isinstance(batch_sample, tuple):
                     sample = batch_sample[0]
                 else:
                     sample = batch_sample
@@ -111,27 +114,23 @@ def train(
                 feat = feat.to(device)
                 dino_feat = dino_feat.to(device)
 
-                # --- Robust grid size for outdoor LiDAR ---
+                # Robust grid size for outdoor LiDAR
                 default_grid_size = 0.05  # 5 cm
                 grid_size = float(sample.get("grid_size", default_grid_size))
                 if not (0.01 <= grid_size <= 1.0):
                     grid_size = default_grid_size
 
-                # Quantize coordinates, robust to degenerate input
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-                # If overflow, auto-coarsen grid_size
                 if grid_coord.max() > 2**15:
                     logger.warning(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
                     grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
                     grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-                # Batch and offset arrays for single-frame (batch_size=1)
                 num_points = coord.shape[0]
                 batch = torch.zeros(num_points, dtype=torch.long, device=device)
                 offset = torch.tensor([num_points], dtype=torch.long, device=device)
 
-                # Build input features
                 if input_mode == "dino_only":
                     input_feat = dino_feat
                 elif input_mode == "vri_dino":
@@ -143,7 +142,6 @@ def train(
                 else:
                     raise ValueError(f"Unknown input_mode: {input_mode}")
 
-                # Model input
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
@@ -159,17 +157,19 @@ def train(
                     logger.info(f"Coord shape: {coord.shape}")
                     logger.info(f"Input feat shape: {input_feat.shape}")
                     logger.info(f"Grid coord shape: {grid_coord.shape}")
-                    logger.info(f"Grid coord range: {grid_coord.min()} to {grid_coord.max()}")
+                    logger.info(f"Grid coord min/max: {grid_coord.min(0)[0]}, {grid_coord.max(0)[0]}")
+                    logger.info(f"Unique grid coords per axis: {[len(torch.unique(grid_coord[:,i])) for i in range(3)]}")
                     logger.info(f"Offset: {offset}")
                     logger.info(f"Batch shape: {batch.shape}")
 
-                # Forward pass
                 optimizer.zero_grad()
                 output = model(data_dict)
                 pred = output.feat
+                pred_proj = proj_head(pred)
 
-                # Compute loss
-                loss = distillation_loss(pred, dino_feat)
+                # Use only points with nonzero DINO features (mask)
+                valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
+                loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
                 loss.backward()
                 optimizer.step()
 
@@ -188,13 +188,13 @@ def train(
         if avg_loss < best_loss:
             best_loss = avg_loss
             save_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(model.state_dict(), save_path)
+            # Save both model and proj_head
+            torch.save({"model": model.state_dict(), "proj_head": proj_head.state_dict()}, save_path)
             logger.info(f"Best model saved to {save_path} (loss = {avg_loss:.6f})")
 
     logger.info("Training complete.")
 
 if __name__ == "__main__":
-    # Set ablation mode here: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
     train(input_mode="dino_only")
     # train(input_mode="vri_dino")
     # train(input_mode="coord_dino")
