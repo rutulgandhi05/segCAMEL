@@ -100,19 +100,43 @@ def train(
                     batch = torch.arange(batch_size_actual, device=device).repeat_interleave(num_points // batch_size_actual)
                     offset = torch.tensor([num_points], dtype=torch.long, device=device)
 
-                # Generate grid coordinates
+                # Generate grid coordinates with proper scaling
                 if isinstance(grid_size, torch.Tensor) and grid_size.dim() == 0:
                     grid_size_val = grid_size.item()
                 else:
                     grid_size_val = grid_size
                 
+                # Use a reasonable grid size - too small grid sizes cause huge coordinate values
+                # Clamp grid size to be at least 0.01 (1cm) to avoid huge grid coordinates
+                min_grid_size = 0.01
+                if grid_size_val < min_grid_size:
+                    logger.warning(f"Grid size {grid_size_val} too small, using {min_grid_size}")
+                    grid_size_val = min_grid_size
+                
                 # Create grid coordinates by quantizing the original coordinates
                 coord_min = coord.min(0)[0]
+                coord_max = coord.max(0)[0]
+                coord_range = coord_max - coord_min
+                
+                # Ensure the quantized coordinates don't exceed reasonable bounds
                 grid_coord = torch.div(
                     coord - coord_min, 
                     grid_size_val, 
                     rounding_mode="trunc"
                 ).int()
+                
+                # Check if grid coordinates are within reasonable bounds (< 2^16 for each dimension)
+                max_grid_coord = grid_coord.max()
+                if max_grid_coord >= 2**15:  # Keep some safety margin
+                    # Rescale grid size to keep coordinates reasonable
+                    new_grid_size = float(coord_range.max()) / (2**14)  # Use 2^14 as max coordinate
+                    logger.warning(f"Grid coordinates too large ({max_grid_coord}), rescaling grid size from {grid_size_val} to {new_grid_size}")
+                    grid_size_val = new_grid_size
+                    grid_coord = torch.div(
+                        coord - coord_min, 
+                        grid_size_val, 
+                        rounding_mode="trunc"
+                    ).int()
 
                 # -- Select features based on input_mode --
                 if input_mode == "dino_only":
@@ -140,8 +164,10 @@ def train(
                 if epoch == 0 and batch_idx == 0:
                     logger.info(f"Grid size used: {grid_size_val}")
                     logger.info(f"Coord shape: {coord.shape}")
+                    logger.info(f"Coord range: {coord_min} to {coord_max}")
                     logger.info(f"Input feat shape: {input_feat.shape}")
                     logger.info(f"Grid coord shape: {grid_coord.shape}")
+                    logger.info(f"Grid coord range: {grid_coord.min()} to {grid_coord.max()}")
                     logger.info(f"Offset: {offset}")
                     logger.info(f"Batch shape: {batch.shape}")
 
