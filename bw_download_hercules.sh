@@ -7,7 +7,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 00:30:00 
-#SBATCH -p dev_cpu_il
+#SBATCH -p gpu_a100_short
 
 #SBATCH --mem=64000
 #SBATCH --mail-type ALL
