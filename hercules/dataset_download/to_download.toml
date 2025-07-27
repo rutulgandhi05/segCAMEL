@@ -2,6 +2,6 @@ folders = ["Mountain_02_Night","Mountain_03_Day","Library_01_Day","Library_02_Ni
 #folders = ["Mountain_01_Day"]
 #files =  ["avea_gt.txt", "gps.csv","data_stamp.csv",  "stereo_stamp.csv", "stereo_right.yaml", "stereo_left.yaml"]
 
-files =  ["avea_gt.txt", "lidar.tar.gz", "avea_stamp.csv", "gps.csv","data_stamp.csv",  "stereo_stamp.csv", "stereo_right.yaml", "stereo_left.yaml", "stereo_left_right.txt", "stereo_lidar.txt", "stereo_right.tar.gz", "stereo_left.tar.gz"]
+files =  ["lidar.tar.gz", "data_stamp.csv", "stereo_right.yaml", "stereo_left.yaml", "stereo_left_right.txt", "stereo_lidar.txt", "stereo_right.tar.gz", "stereo_left.tar.gz"]
 
 output_folder = "data/hercules"
