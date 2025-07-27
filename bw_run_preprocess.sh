@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J SegCAMEL
+#SBATCH -J Preprocess
 #SBATCH -o preprocess_output.txt
 #SBATCH -e preprocess_error.txt
 #SBATCH -c 8

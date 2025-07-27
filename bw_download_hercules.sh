@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J SegCAMEL
+#SBATCH -J HerculesDownload
 #SBATCH -o hercules_output.txt
 #SBATCH -e hercules_error.txt
 #SBATCH -c 8

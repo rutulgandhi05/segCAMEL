@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J SegCAMEL
+#SBATCH -J Inference
 #SBATCH -o inference_output.txt
 #SBATCH -e inference_error.txt
 #SBATCH -c 8

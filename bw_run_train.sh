@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J SegCAMEL
+#SBATCH -J Train
 #SBATCH -o train_output.txt
 #SBATCH -e train_error.txt
 #SBATCH -c 8
