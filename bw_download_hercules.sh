@@ -3,7 +3,7 @@
 #SBATCH -J HerculesDownload
 #SBATCH -o hercules_output.txt
 #SBATCH -e hercules_error.txt
-#SBATCH -c 8
+#SBATCH -c 4
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 02:00:00 
