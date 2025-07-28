@@ -156,11 +156,11 @@ if __name__ == "__main__":
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     
     data_root = Path(str(data_root))
-    data_root = data_root / "Mountain_01_Day"
+    root_dir = data_root / "Mountain_01_Day"
     save_dir = data_root / "processed_data"
 
     preprocess_and_save_hercules(
-        root_dir=data_root,
+        root_dir=root_dir,
         save_dir=save_dir,
         workers=8,
         batch_size=16,     
