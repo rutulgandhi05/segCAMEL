@@ -1,6 +1,9 @@
+import time
 import torch
 from pathlib import Path
 from tqdm import tqdm
+from threading import Thread
+from queue import Queue
 
 from scripts.feature_extractor import Extractor
 from scripts.dataloader import HerculesDataset
@@ -10,96 +13,145 @@ from scripts.project_2d_to_3d import LidarToImageProjector
 
 logger = setup_logger("preprocess")
 
-
 def custom_collate(batch):
-    # Custom collate for variable-size fields (pointcloud etc.)
+    # Custom collate for variable‐size fields (pointcloud etc.)
     collated = {}
     for key in batch[0]:
-        values = [sample[key] for sample in batch]
-        
-        if isinstance(values[0], torch.Tensor) and all(v.shape == values[0].shape for v in values):
-            collated[key] = torch.stack(values, dim=0)
+        vals = [sample[key] for sample in batch]
+        if isinstance(vals[0], torch.Tensor) and all(v.shape == vals[0].shape for v in vals):
+            collated[key] = torch.stack(vals, dim=0)
         else:
-            collated[key] = values
+            collated[key] = vals
     return collated
 
 def preprocess_and_save_hercules(
-    root_dir,
-    save_dir,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    workers=8
+    root_dir: str,
+    save_dir: str,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    workers: int = 8,
+    batch_size: int = 8,
+    prefetch_factor: int = 2
 ):
+    root_dir = Path(root_dir)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- extractor and dataset ---
     extractor = Extractor()
-    dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)  # Use extractor's transform
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=workers, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
+    dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)
+    dataset_len = len(dataset)
+
+    # --- DataLoader with persistent workers & prefetching ---
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=prefetch_factor,
+        collate_fn=custom_collate
+    )
 
     print(f"Using DINO model: {extractor.dino_model}")
 
-    for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
-        # --- Batch processing ---
-        image_tensors = batch["image_tensor"]  # [B, C, H, W]
+    # --- set up background writer thread ---
+    save_queue: Queue = Queue(maxsize=workers * 2)
+
+    def writer():
+        while True:
+            item = save_queue.get()
+            if item is None:
+                break
+            path, data = item
+            torch.save(data, path)
+            save_queue.task_done()
+
+    writer_thread = Thread(target=writer, daemon=True)
+    writer_thread.start()
+
+    start_time = time.time()
+    frame_counter = 0
+
+    # --- main loop ---
+    for batch in tqdm(dataloader, desc="Processing frames", unit="batch"):
+        # prepare images
+        image_tensors = batch["image_tensor"]
         if isinstance(image_tensors, list):
             image_tensors = torch.stack(image_tensors, dim=0)
-        batch_size = image_tensors.shape[0]
+        image_tensors = image_tensors.to(device, non_blocking=True)
 
-        image_tensors = image_tensors.to(device)
+        # extract DINO features
         with torch.no_grad():
             features_batch = extractor.extract_dino_features(image_tensors)
 
-        for i in range(batch_size):
+        # now move features to device once
+        # process each sample in the batch
+        for i in range(image_tensors.shape[0]):
+            # flat DINO patch features
             features = features_batch[i]
-            dino_feat_tensor = features.flat().tensor.to(device)  # torch.Tensor
+            dino_feat = features.flat().tensor.to(device)
 
-            # --- Pointcloud Handling ---
-            pointcloud = batch["pointcloud"][i].to(device)
-            lidar_xyz = pointcloud[:, :3].to(device)
-            lidar_feats = pointcloud[:, 3:] if pointcloud.shape[1] > 3 else torch.zeros((lidar_xyz.shape[0], 1), dtype=pointcloud.dtype)
-            lidar_feats = lidar_feats.to(device)
+            # lidar xyz + extra feats
+            pc = batch["pointcloud"][i].to(device)
+            xyz = pc[:, :3].to(device)
+            feats = pc[:, 3:].to(device) if pc.shape[1] > 3 else torch.zeros((xyz.shape[0], 1), dtype=pc.dtype, device=device)
 
-            # --- Intrinsics/Extrinsics Handling ---
-            intrinsics = batch["intrinsics"][i].to(device)
-            #if isinstance(intrinsics, torch.Tensor): intrinsics = intrinsics.squeeze().cpu().numpy()
-            extrinsics = batch["extrinsics"][i].to(device)
-            #if isinstance(extrinsics, torch.Tensor): extrinsics = extrinsics.squeeze().cpu().numpy()
+            # intrinsics / extrinsics
+            intr = batch["intrinsics"][i].to(device)
+            ext  = batch["extrinsics"][i].to(device)
 
-            # --- Projector & Feature Assignment ---
+            # project & assign
             projector = LidarToImageProjector(
-                intrinsic=intrinsics,
-                extrinsic=extrinsics,
+                intrinsic=intr,
+                extrinsic=ext,
                 image_size=batch["input_size"][i],
                 feature_map_size=batch["feature_map_size"][i],
-                patch_features=dino_feat_tensor
+                patch_features=dino_feat
             )
-            assigned_feats, mask = projector.assign_features(lidar_xyz.to(torch.float32))
-            assigned_feats = assigned_feats.float().cpu()
+            assigned_feats, mask = projector.assign_features(xyz.float())
 
-            grid_size_manual = 0.05
+            # — now move everything to CPU once —
+            coord_cpu     = xyz.float().cpu()
+            feat_cpu      = feats.float().cpu()
+            dino_cpu      = assigned_feats.float().cpu()
+            mask_cpu      = mask.cpu()
+            img_cpu       = image_tensors[i].cpu()
+            grid_size_cpu = torch.tensor(0.05, dtype=torch.float32)
 
+            # build save dict
             save_data = {
-                "coord": lidar_xyz.float().cpu(),      # [N, 3]
-                "feat": lidar_feats.float().cpu(),     # [N, F]
-                "dino_feat": assigned_feats,           # [N, D]
-                "grid_size": torch.tensor(grid_size_manual, dtype=torch.float32),
-                "mask": mask.cpu(),  # [N]
-                "image_tensor": image_tensors[i].cpu(),  # [C, H, W]
+                "coord": coord_cpu,
+                "feat": feat_cpu,
+                "dino_feat": dino_cpu,
+                "grid_size": grid_size_cpu,
+                "mask": mask_cpu,
+                "image_tensor": img_cpu,
             }
-            frame_idx = idx * batch_size + i
-            save_path = save_dir / f"frame_{frame_idx:05d}.pth"
-            torch.save(save_data, save_path)
-            if frame_idx % 10 == 0 or frame_idx == (len(dataset)-1):
-                print(f"[Saved] {save_path}")
+
+            # enqueue write
+            save_path = save_dir / f"frame_{frame_counter:05d}.pth"
+            save_queue.put((save_path, save_data))
+
+            frame_counter += 1
+
+            # optional progress log
+            if frame_counter % 10 == 0 or frame_counter == dataset_len:
+                print(f"[Queued] {save_path}")
+
+    # wait for all writes to finish
+    save_queue.join()
+    save_queue.put(None)
+    writer_thread.join()
+
+    total_time = time.time() - start_time
+    print(f"Preprocessing completed in {total_time:.1f}s ({frame_counter} frames)")
 
 if __name__ == "__main__":
-    import time
-
-    start_time = time.time()
-    print("Starting preprocessing...")
-    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
-    HERCULES_ROOT_DIR = "data/hercules/Mountain_01_Day/"
-    HERCULES_SAVE_DIR = "data/hercules/Mountain_01_Day/processed_data"
-    preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR, workers=8)
-    end_time = time.time()
-    print("Preprocessing completed.")
-    print(f"Total time taken: {end_time - start_time:.2f} seconds")
+    preprocess_and_save_hercules(
+        root_dir="data/hercules/Mountain_01_Day/",
+        save_dir="data/hercules/Mountain_01_Day/processed_data",
+        workers=8,
+        batch_size=16,     # try bumping up to 16 or 32 if GPU memory allows
+        prefetch_factor=4  # tune based on your I/O vs CPU/GPU balance
+    )
