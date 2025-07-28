@@ -99,7 +99,7 @@ if __name__ == "__main__":
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
     HERCULES_ROOT_DIR = "data/hercules/Mountain_01_Day/"
     HERCULES_SAVE_DIR = "data/hercules/Mountain_01_Day/processed_data"
-    preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR, workers=2)
+    preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR, workers=8)
     end_time = time.time()
     print("Preprocessing completed.")
     print(f"Total time taken: {end_time - start_time:.2f} seconds")
