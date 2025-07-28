@@ -84,7 +84,7 @@ def main(output_folder):
                 for file_obj in sub_folder_files:
                     filename, file_link = list(file_obj.items())[0]
                     if filename in to_download.get("files"):
-                        file_path = os.path.join(sub_folder, filename)
+                        file_path = sub_folder / filename
                         file_id = file_link.split('/')
                         file_id = file_id[-2] if len(file_id) > 2 else file_id[-1]
                         download_files(service, file_id, file_path)
