@@ -1,7 +1,7 @@
 import io
-
 import numpy as np
 import pandas as pd
+
 from pathlib import Path
 from tqdm import tqdm
 from hercules.aeva import load_aeva_bin
@@ -9,6 +9,44 @@ from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
 from utils.misc import find_closest
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+
+
+def _process_hercules_bin(
+    bin_path: Path,
+    return_all_fields: bool,
+    left_stamps: list[int],
+    right_stamps: list[int],
+    left_dict: dict[int, Path],
+    right_dict: dict[int, Path],
+    stereo_left_intr: np.ndarray,
+    stereo_right_intr: np.ndarray,
+    lidar_to_left_ext: np.ndarray,
+    lidar_to_right_ext: np.ndarray,
+):
+    pc = load_aeva_bin(bin_path, return_all_fields=return_all_fields)
+    if pc is None:
+        return None
+
+    ts = int(bin_path.stem)
+    l_ts = find_closest(left_stamps, ts) if left_stamps else None
+    r_ts = find_closest(right_stamps, ts) if right_stamps else None
+
+    l_img = left_dict.get(l_ts)
+    r_img = right_dict.get(r_ts)
+    if l_img is None and r_img is None:
+        return None
+
+    return {
+        "pointcloud": pc,
+        "left_image": l_img,
+        "right_image": r_img,
+        "timestamps": [ts, l_ts, r_ts],
+        "stereo_left_intrinsics": stereo_left_intr,
+        "stereo_right_intrinsics": stereo_right_intr,
+        "lidar_to_stereo_left_extrinsic": lidar_to_left_ext,
+        "lidar_to_stereo_right_extrinsic": lidar_to_right_ext,
+    }
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, max_workers: int = None):
     """
@@ -20,7 +58,6 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     left_img_folder = dataset_folder / "Image" / "stereo_left"
     right_img_folder = dataset_folder / "Image" / "stereo_right"
     calib_folder = dataset_folder / "Calibration"
-    #sensor_data_folder = dataset_folder / "Sensor_data"
 
     # Load calibration intrinsics
     def load_intrinsics(file_path: Path):
@@ -55,42 +92,28 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     # Files
     bin_files = sorted(lidar_folder.glob("*.bin"))
     
-    def _process(bin_path: Path):
-        pc = load_aeva_bin(bin_path, return_all_fields=return_all_fields)
-        if pc is None:
-            return None
-
-        ts = int(bin_path.stem)
-        # find nearest image stamps
-        l_ts = find_closest(left_stamps, ts)  if left_stamps  else None
-        r_ts = find_closest(right_stamps, ts) if right_stamps else None
-
-        l_img = left_dict.get(l_ts)
-        r_img = right_dict.get(r_ts)
-        if l_img is None and r_img is None:
-            return None
-
-        return {
-            "pointcloud": pc,
-            "left_image": l_img,
-            "right_image": r_img,
-            "timestamps": [ts, l_ts, r_ts],
-            "stereo_left_intrinsics":  stereo_left_intr,
-            "stereo_right_intrinsics": stereo_right_intr,
-            "lidar_to_stereo_left_extrinsic":  lidar_to_left_ext,
-            "lidar_to_stereo_right_extrinsic": lidar_to_right_ext,
-        }
+    process_fn = partial(
+        _process_hercules_bin,
+        return_all_fields=return_all_fields,
+        left_stamps=left_stamps,
+        right_stamps=right_stamps,
+        left_dict=left_dict,
+        right_dict=right_dict,
+        stereo_left_intr=stereo_left_intr,
+        stereo_right_intr=stereo_right_intr,
+        lidar_to_left_ext=lidar_to_left_ext,
+        lidar_to_right_ext=lidar_to_right_ext,
+    )
 
     # --- 6. Parallel execution ---
-    results = []
+    # Parallel execution
+    paired_samples: list[dict] = []
     with ProcessPoolExecutor(max_workers=max_workers) as exe:
-        # executor.map keeps order; wrap in tqdm for a progress bar
-        for res in tqdm(exe.map(_process, bin_files), total=len(bin_files),
-                        desc="Loading & pairing", unit="file"):
-            if res is not None:
-                results.append(res)
+        for result in tqdm(exe.map(process_fn, bin_files), total=len(bin_files), desc="Loading & pairing", unit="file"):
+            if result is not None:
+                paired_samples.append(result)
 
-    return results
+    return paired_samples
 
 def load_scantinel_dataset_folder(dataset_folder: Path):
     """
