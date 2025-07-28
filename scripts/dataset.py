@@ -7,9 +7,10 @@ from tqdm import tqdm
 from hercules.aeva import load_aeva_bin
 from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
-from utils.misc import find_closest_stamp
+from utils.misc import find_closest
+from concurrent.futures import ProcessPoolExecutor
 
-def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
+def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, max_workers: int = None):
     """
     Efficient loader for the Hercules dataset from a folder.
     Returns a list of dictionaries, each with all fields needed for further batching.
@@ -22,61 +23,74 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False):
     #sensor_data_folder = dataset_folder / "Sensor_data"
 
     # Load calibration intrinsics
-    def load_intrinsics(file_path):
-        if file_path.exists():
-            with file_path.open("r") as f:
-                lines = f.readlines()
-                intrinsic = np.array(lines[3].strip().replace("\t", " ").split(" "), dtype=np.float32)
-                intrinsic = intrinsic.reshape(3, 3) if intrinsic.size == 9 else None
-                distortion = np.array(lines[6].strip().replace("\t", " ").split(" "), dtype=np.float32)
-        else:
-            intrinsic, distortion = None, None
-        return intrinsic, distortion
+    def load_intrinsics(file_path: Path):
+        if not file_path.exists():
+            return None, None
+        lines = file_path.read_text().splitlines()
+        K = np.fromstring(lines[3], sep="\t" if "\t" in lines[3] else " ", dtype=np.float32)
+        K = K.reshape(3, 3) if K.size == 9 else None
+        D = np.fromstring(lines[6], sep="\t" if "\t" in lines[6] else " ", dtype=np.float32)
+        return K, D
 
     stereo_left_intr, stereo_left_dist = load_intrinsics(calib_folder / "stereo_left.yaml")
     stereo_right_intr, stereo_right_dist = load_intrinsics(calib_folder / "stereo_right.yaml")
 
     # Extrinsics
-    stereo_lidar_path = calib_folder / "stereo_lidar.txt"
-    lines = stereo_lidar_path.read_text().splitlines()
-    def get_extrinsic(line_idx):
-        arr = np.array([float(x) for x in lines[line_idx].split()[1:]], dtype=np.float32).reshape(3, 4)
-        return np.vstack([arr, np.array([0,0,0,1], dtype=np.float32)])
+    lines = (calib_folder / "stereo_lidar.txt").read_text().splitlines()
+    def _get_ext(idx):
+        mat = np.fromstring(" ".join(lines[idx].split()[1:]), sep=" ", dtype=np.float32).reshape(3, 4)
+        return np.vstack([mat, [0,0,0,1]]).astype(np.float32)
 
-    lidar_to_left_ext = get_extrinsic(1)
-    lidar_to_right_ext = get_extrinsic(4)
+    lidar_to_left_ext  = _get_ext(1)
+    lidar_to_right_ext = _get_ext(4)
+
+    left_images  = sorted(left_img_folder.glob("*.png"))  if left_img_folder.exists()  else []
+    right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
+
+    left_stamps = sorted(int(p.stem) for p in left_images)
+    right_stamps = sorted(int(p.stem) for p in right_images)
+    left_dict  = {int(p.stem): p for p in left_images}
+    right_dict = {int(p.stem): p for p in right_images}
 
     # Files
     bin_files = sorted(lidar_folder.glob("*.bin"))
-    left_images = sorted(left_img_folder.glob("*.png")) if left_img_folder.exists() else []
-    right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
-    left_stamps = [int(img.stem) for img in left_images]
-    right_stamps = [int(img.stem) for img in right_images]
+    
+    def _process(bin_path: Path):
+        pc = load_aeva_bin(bin_path, return_all_fields=return_all_fields)
+        if pc is None:
+            return None
 
-    # Load point clouds and pair with images
-    paired_samples = []
-    for bin_file in tqdm(bin_files, desc="Loading LiDAR files", unit="file", leave=False):
-        point_cloud = load_aeva_bin(bin_file, return_all_fields=return_all_fields)
-        if point_cloud is None:
-            continue
-        bin_stamp = int(bin_file.stem)
-        left_stamp = find_closest_stamp(left_stamps, bin_stamp) if left_stamps else None
-        right_stamp = find_closest_stamp(right_stamps, bin_stamp) if right_stamps else None
-        left_image = next((img for img in left_images if int(img.stem) == left_stamp), None) if left_stamp is not None else None
-        right_image = next((img for img in right_images if int(img.stem) == right_stamp), None) if right_stamp is not None else None
-        if left_image is None and right_image is None:
-            continue  # Skip if no matching images
-        paired_samples.append({
-            "pointcloud": point_cloud,
-            "left_image": left_image,
-            "right_image": right_image,
-            "timestamps": [bin_stamp, left_stamp, right_stamp],
-            "stereo_left_intrinsics": stereo_left_intr,
+        ts = int(bin_path.stem)
+        # find nearest image stamps
+        l_ts = find_closest(left_stamps, ts)  if left_stamps  else None
+        r_ts = find_closest(right_stamps, ts) if right_stamps else None
+
+        l_img = left_dict.get(l_ts)
+        r_img = right_dict.get(r_ts)
+        if l_img is None and r_img is None:
+            return None
+
+        return {
+            "pointcloud": pc,
+            "left_image": l_img,
+            "right_image": r_img,
+            "timestamps": [ts, l_ts, r_ts],
+            "stereo_left_intrinsics":  stereo_left_intr,
             "stereo_right_intrinsics": stereo_right_intr,
-            "lidar_to_stereo_left_extrinsic": lidar_to_left_ext,
+            "lidar_to_stereo_left_extrinsic":  lidar_to_left_ext,
             "lidar_to_stereo_right_extrinsic": lidar_to_right_ext,
-        })
-    return paired_samples
+        }
+
+    # --- 6. Parallel execution ---
+    results = []
+    with ProcessPoolExecutor(max_workers=max_workers) as exe:
+        # executor.map keeps order; wrap in tqdm for a progress bar
+        for res in tqdm(exe.map(_process, bin_files), total=len(bin_files),
+                        desc="Loading & pairing", unit="file"):
+            if res is not None:
+                results.append(res)
+
+    return results
 
 def load_scantinel_dataset_folder(dataset_folder: Path):
     """
@@ -118,7 +132,7 @@ def load_scantinel_dataset_folder(dataset_folder: Path):
         pointcloud, ts_lidar = pcl
         pointcloud = parse_pcl(pointcloud, point_stride=40, dtype=np.float32, num_fields=10)
 
-        ts_cam = find_closest_stamp(cam_stamps, ts_lidar)
+        ts_cam = find_closest(cam_stamps, ts_lidar)
         cam = next((msg for msg in cam_data if msg[1] == ts_cam), None)
 
         sample = {

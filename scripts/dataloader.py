@@ -34,7 +34,7 @@ class ScantinelDataset(Dataset):
         }
 
 class HerculesDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, transform=None, max_workers=8):
         """
         PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
 
@@ -42,7 +42,7 @@ class HerculesDataset(Dataset):
             root_dir (str or Path): Dataset folder.
         """
         self.root_dir = Path(root_dir)
-        self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True)
+        self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True, max_workers=max_workers)
         self.transform_factory = transform if transform is not None else transforms.ToTensor()
 
     def __len__(self):

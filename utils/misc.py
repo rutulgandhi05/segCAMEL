@@ -4,22 +4,16 @@ import logging
 import pandas as pd
 import numpy as np
 
-def find_closest_stamp(stamps, target_stamp):
-    """
-    Find the closest timestamp in a list of timestamps to a target timestamp.
-    
-    Args:
-        stamps (list): List of timestamps.
-        target_stamp (float): The target timestamp to find the closest match for.
-        
-    Returns:
-        float: The closest timestamp to the target.
-    """
+def find_closest(stamps, target):
+        """Binary‐search nearest stamp."""
+        i = bisect_left(stamps, target)
+        if i == 0:
+            return stamps[0]
+        if i == len(stamps):
+            return stamps[-1]
+        before, after = stamps[i-1], stamps[i]
+        return before if (target - before) <= (after - target) else after
 
-    i = bisect_left(stamps, target_stamp)
-    #return min(stamps, key=lambda x: abs(x - target_stamp))
-    return min(stamps[max(0, i-1): i+2], key=lambda t: abs(target_stamp - t))
-    
 
 def setup_logger(name="train"):
 

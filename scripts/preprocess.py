@@ -26,14 +26,15 @@ def custom_collate(batch):
 def preprocess_and_save_hercules(
     root_dir,
     save_dir,
-    device="cuda" if torch.cuda.is_available() else "cpu"
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    workers=8
 ):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     extractor = Extractor()
     dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)  # Use extractor's transform
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=8, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
-    
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=workers, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
+
     print(f"Using DINO model: {extractor.dino_model}")
 
     for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
@@ -98,7 +99,7 @@ if __name__ == "__main__":
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
     HERCULES_ROOT_DIR = "data/hercules/Mountain_01_Day/"
     HERCULES_SAVE_DIR = "data/hercules/Mountain_01_Day/processed_data"
-    preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR)
+    preprocess_and_save_hercules(HERCULES_ROOT_DIR, HERCULES_SAVE_DIR, workers=2)
     end_time = time.time()
     print("Preprocessing completed.")
     print(f"Total time taken: {end_time - start_time:.2f} seconds")
