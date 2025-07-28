@@ -193,6 +193,6 @@ if __name__ == "__main__":
         epochs=20,
         batch_size=1,
         lr=1e-3,
-        save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_exp.pth",
-        input_mode="dino_only"
+        save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
+        input_mode="vri_dino"
     )
