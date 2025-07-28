@@ -9,11 +9,11 @@
 #SBATCH -t 00:30:00 
 #SBATCH -p gpu_a100_short
 #SBATCH --gres=gpu:2
-#SBATCH --mem=64000
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
 source venv/bin/activate
+module load devel/cuda/12.8
 python -m hercules.dataset_download.gdrive_extract
 
 

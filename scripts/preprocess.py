@@ -32,7 +32,7 @@ def preprocess_and_save_hercules(
     save_dir.mkdir(parents=True, exist_ok=True)
     extractor = Extractor()
     dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)  # Use extractor's transform
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=8, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
     
     print(f"Using DINO model: {extractor.dino_model}")
 
