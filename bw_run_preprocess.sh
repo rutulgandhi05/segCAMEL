@@ -12,7 +12,7 @@
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
-export HERCULES_PREPROCESS=$(ws_find hercules_preprocessed)
+export HERCULES_DATASET=$(ws_find hercules_dataset)
 source venv/bin/activate
 module load devel/cuda/12.8
 python -m scripts.preprocess

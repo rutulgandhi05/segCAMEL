@@ -25,8 +25,8 @@ def custom_collate(batch):
     return collated
 
 def preprocess_and_save_hercules(
-    root_dir: str,
-    save_dir: str,
+    root_dir: Path,
+    save_dir: Path,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     workers: int = 8,
     batch_size: int = 8,
@@ -149,14 +149,19 @@ def preprocess_and_save_hercules(
 
 if __name__ == "__main__":
     import os
-    save_root = os.getenv("HERCULES_PREPROCESS")
-    if not save_root:
-        raise ValueError("Please set the HERCULES_PREPROCESS environment variable to specify where to save processed data.")
-    save_dir = os.path.join(save_root, "Mountain_01_Day/processed_data")
+    
+    data_folder = "Mountain_01_Day"
+    data_root = os.getenv("HERCULES_DATASET")
+    if not data_root:
+        raise EnvironmentError("HERCULES_DATASET environment variable not set.")
+    data_root = Path(data_root)
+    data_root = data_root / data_folder
+    save_dir = data_root / "processed_data"
+
     preprocess_and_save_hercules(
-        root_dir="data/hercules/Mountain_01_Day/",
+        root_dir=data_root,
         save_dir=save_dir,
         workers=8,
-        batch_size=16,     # try bumping up to 16 or 32 if GPU memory allows
+        batch_size=16,     
         prefetch_factor=4  # tune based on your I/O vs CPU/GPU balance
     )
