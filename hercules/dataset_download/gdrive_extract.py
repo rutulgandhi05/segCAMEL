@@ -55,10 +55,10 @@ def download_files(service, file_id, filename):
         f.write(fh.read())
         f.close()
 
-def main():
+def main(output_folder):
     to_download = toml.load("hercules/dataset_download/to_download.toml")
     service = create_service()
-    out_folder = Path(to_download.get("output_folder"))
+    out_folder = Path(output_folder)
     if not os.path.exists(out_folder):
         raise Exception(f"Output folder {out_folder} does not exist. Please create it first.")
 
@@ -85,4 +85,5 @@ def main():
                         download_files(service, file_id, file_path)
 
 if __name__ == "__main__":
-    main()
+    output_folder = os.getenv("HERCULES_DATASET")
+    main(output_folder)
