@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH -J HerculesDownload
-#SBATCH -o hercules_output.txt
-#SBATCH -e hercules_error.txt
+#SBATCH -J HerculesDownload2
+#SBATCH -o hercules_output2.txt
+#SBATCH -e hercules_error2.txt
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1

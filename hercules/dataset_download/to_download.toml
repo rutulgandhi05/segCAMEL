@@ -1,5 +1,5 @@
 #folders = ["Mountain_01_Day","Mountain_02_Night","Mountain_03_Day","Library_01_Day","Library_03_Day","Sports_complex_01_Day","Sports_complex_02_Night","Sports_complex_03_Day","Parking_lot_01_Day","Parking_lot_02_Day","Parking_lot_03_Night","Parking_lot_04_Day"]
-folders = ["Mountain_01_Day", "Mountain_02_Night", "Mountain_03_Day"]
+folders = ["Library_01_Day","Library_03_Day","Sports_complex_01_Day","Sports_complex_02_Night","Sports_complex_03_Day","Parking_lot_01_Day","Parking_lot_02_Day","Parking_lot_03_Night","Parking_lot_04_Day"]
 #files =  ["avea_gt.txt", "gps.csv","data_stamp.csv",  "stereo_stamp.csv", "stereo_right.yaml", "stereo_left.yaml"]
 
 files =  ["lidar.tar.gz", "data_stamp.csv", "stereo_right.yaml", "stereo_left.yaml", "stereo_left_right.txt", "stereo_lidar.txt", "stereo_right.tar.gz", "stereo_left.tar.gz"]
