@@ -152,6 +152,7 @@ if __name__ == "__main__":
     
     data_folder = "Mountain_01_Day"
     data_root = os.getenv("HERCULES_DATASET")
+    print(f"Using data root: {data_root}")
     if not data_root:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     data_root = Path(data_root)
