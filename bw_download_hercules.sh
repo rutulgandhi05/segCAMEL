@@ -7,8 +7,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 02:00:00 
-#SBATCH -p gpu_h100
-#SBATCH --gres=gpu:2
+#SBATCH -p highmem
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
