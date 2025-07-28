@@ -150,13 +150,12 @@ def preprocess_and_save_hercules(
 if __name__ == "__main__":
     import os
     
-    data_folder = "Mountain_01_Day"
     data_root = os.getenv("HERCULES_DATASET")
     print(f"Using data root: {data_root}")
     if not data_root:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     data_root = Path(data_root)
-    data_root = data_root / data_folder
+    data_root = data_root / "Mountain_01_Day"
     save_dir = data_root / "processed_data"
 
     preprocess_and_save_hercules(
