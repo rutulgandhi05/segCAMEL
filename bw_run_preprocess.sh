@@ -6,7 +6,7 @@
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 02:00:00 
+#SBATCH -t 00:30:00 
 #SBATCH -p gpu_a100_short
 #SBATCH --gres=gpu:2
 #SBATCH --mail-type ALL
