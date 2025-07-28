@@ -109,5 +109,5 @@ if __name__ == "__main__":
     if output_folder is None:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     
-    worker_count = min(8, multiprocessing.cpu_count())
+    worker_count = min(4, multiprocessing.cpu_count())
     main(output_folder=output_folder, max_workers=worker_count)
