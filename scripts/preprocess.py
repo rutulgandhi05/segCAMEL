@@ -1,21 +1,27 @@
-import os
-from pathlib import Path
 import torch
-import numpy as np
+from pathlib import Path
 from tqdm import tqdm
-from sklearn.neighbors import NearestNeighbors
 
 from scripts.feature_extractor import Extractor
-from scripts.dataloader import ScantinelDataset, HerculesDataset
+from scripts.dataloader import HerculesDataset
 from torch.utils.data import DataLoader
-from torchvision.transforms import ToPILImage
-from PIL import Image
 from utils.misc import setup_logger
-from utils.misc import scale_intrinsics
 from scripts.project_2d_to_3d import LidarToImageProjector
 
 logger = setup_logger("preprocess")
 
+
+def custom_collate(batch):
+    # Custom collate for variable-size fields (pointcloud etc.)
+    collated = {}
+    for key in batch[0]:
+        values = [sample[key] for sample in batch]
+        
+        if isinstance(values[0], torch.Tensor) and all(v.shape == values[0].shape for v in values):
+            collated[key] = torch.stack(values, dim=0)
+        else:
+            collated[key] = values
+    return collated
 
 def preprocess_and_save_hercules(
     root_dir,
@@ -24,80 +30,65 @@ def preprocess_and_save_hercules(
 ):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-
-    dataset = HerculesDataset(root_dir)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-    
     extractor = Extractor()
+    dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)  # Use extractor's transform
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4, pin_memory=True, collate_fn=custom_collate)  # Try batch_size=4 or more if GPU fits!
+    
     print(f"Using DINO model: {extractor.dino_model}")
 
     for idx, batch in enumerate(tqdm(dataloader, desc="Processing frames")):
+        # --- Batch processing ---
+        image_tensors = batch["image_tensor"]  # [B, C, H, W]
+        if isinstance(image_tensors, list):
+            image_tensors = torch.stack(image_tensors, dim=0)
+        batch_size = image_tensors.shape[0]
 
-        image_tensor = batch["image_tensor"][0]
-        pil_img = ToPILImage()(image_tensor).convert("RGB")
-    
-        features = extractor.extract_dino_features(image=pil_img, filename=f"frame_{idx:05d}")
-        pil_img.close()  # Close the PIL image to free resources
-        dino_feat_tensor = features["features"].flat().tensor
-        input_size = features["input_size"]
-        feature_map_size = features["feature_map_size"]
+        image_tensors = image_tensors.to(device)
+        with torch.no_grad():
+            features_batch = extractor.extract_dino_features(image_tensors)
 
-        # ======= Pointcloud Handling =======
-        pointcloud = batch["pointcloud"]  # shape should be [N, C] already
-        if isinstance(pointcloud, torch.Tensor):
-            pointcloud = pointcloud.squeeze().numpy()
-        if pointcloud.ndim == 3 and pointcloud.shape[0] == 1:
-            pointcloud = pointcloud.squeeze(0)  # now shape [N, C]
+        for i in range(batch_size):
+            features = features_batch[i]
+            dino_feat_tensor = features.flat().tensor.to(device)  # torch.Tensor
 
-        lidar_xyz = pointcloud[:, :3]
-        lidar_feats = pointcloud[:, 3:] if pointcloud.shape[1] > 3 else np.zeros((lidar_xyz.shape[0], 1), dtype=np.float32)
+            # --- Pointcloud Handling ---
+            pointcloud = batch["pointcloud"][i].to(device)
+            lidar_xyz = pointcloud[:, :3].to(device)
+            lidar_feats = pointcloud[:, 3:] if pointcloud.shape[1] > 3 else torch.zeros((lidar_xyz.shape[0], 1), dtype=pointcloud.dtype)
+            lidar_feats = lidar_feats.to(device)
 
-        # ======= Intrinsics Handling =======
-        intrinsics = batch["intrinsics"]
-        intrinsics = scale_intrinsics(intrinsics, pil_img.size, input_size)
-        if isinstance(intrinsics, torch.Tensor):
-            intrinsics = intrinsics.squeeze().numpy()
-        elif isinstance(intrinsics, np.ndarray):
-            intrinsics = intrinsics.squeeze()
-        
-        extrinsics = batch["extrinsics"]
-        if isinstance(extrinsics, torch.Tensor):
-            extrinsics = extrinsics.squeeze().numpy()
-        elif isinstance(extrinsics, np.ndarray):
-            extrinsics = extrinsics.squeeze()
+            # --- Intrinsics/Extrinsics Handling ---
+            intrinsics = batch["intrinsics"][i].to(device)
+            #if isinstance(intrinsics, torch.Tensor): intrinsics = intrinsics.squeeze().cpu().numpy()
+            extrinsics = batch["extrinsics"][i].to(device)
+            #if isinstance(extrinsics, torch.Tensor): extrinsics = extrinsics.squeeze().cpu().numpy()
 
-        #print(type(intrinsics), type(extrinsics), type(dino_feat_tensor), type(features["input_size"]))
-        
-        # ======= Projector & Feature Assignment =======
-        projector = LidarToImageProjector(
-            intrinsic=intrinsics,
-            extrinsic=extrinsics,
-            image_size=input_size,
-            feature_map_size=feature_map_size,
-            patch_features=dino_feat_tensor
-        )
-        assigned_feats, mask = projector.assign_features(lidar_xyz=lidar_xyz)
-        assigned_feats = torch.tensor(assigned_feats, dtype=torch.float32)
+            # --- Projector & Feature Assignment ---
+            projector = LidarToImageProjector(
+                intrinsic=intrinsics,
+                extrinsic=extrinsics,
+                image_size=batch["input_size"][i],
+                feature_map_size=batch["feature_map_size"][i],
+                patch_features=dino_feat_tensor
+            )
+            assigned_feats, mask = projector.assign_features(lidar_xyz.to(torch.float32))
+            assigned_feats = assigned_feats.float().cpu()
 
-        # ======= Grid Size Calculation =======
-        if lidar_xyz.shape[0] > 1:
-            diffs = np.diff(np.sort(lidar_xyz, axis=0), axis=0)
-            mean_spacing = np.mean(np.abs(diffs), axis=0)
-            grid_size_manual = float(np.mean(mean_spacing))
-        else:
             grid_size_manual = 0.05
 
-        # ======= Save Processed Data =======
-        save_data = {
-            "coord": torch.tensor(lidar_xyz, dtype=torch.float32),
-            "feat": torch.tensor(lidar_feats, dtype=torch.float32),
-            "dino_feat": assigned_feats,
-            "grid_size": torch.tensor(grid_size_manual, dtype=torch.float32)
-        }
-        save_path = save_dir / f"frame_{idx:05d}.pth"
-        torch.save(save_data, save_path)
-        print(f"[Saved] {save_path}")
-
+            save_data = {
+                "coord": lidar_xyz.float().cpu(),      # [N, 3]
+                "feat": lidar_feats.float().cpu(),     # [N, F]
+                "dino_feat": assigned_feats,           # [N, D]
+                "grid_size": torch.tensor(grid_size_manual, dtype=torch.float32),
+                "mask": mask.cpu(),  # [N]
+                "image_tensor": image_tensors[i].cpu(),  # [C, H, W]
+            }
+            frame_idx = idx * batch_size + i
+            save_path = save_dir / f"frame_{frame_idx:05d}.pth"
+            torch.save(save_data, save_path)
+            if frame_idx % 10 == 0 or frame_idx == (len(dataset)-1):
+                print(f"[Saved] {save_path}")
 
 if __name__ == "__main__":
     import time

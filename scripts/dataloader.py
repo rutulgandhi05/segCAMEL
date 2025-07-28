@@ -3,7 +3,8 @@ from pathlib import Path
 from torchvision import transforms
 from scripts.dataset import load_scantinel_dataset_folder, load_hercules_dataset_folder
 from PIL import Image
-
+from utils.misc import scale_intrinsics
+import torch
 class ScantinelDataset(Dataset):
     def __init__(self, root_dir):
         """
@@ -14,21 +15,16 @@ class ScantinelDataset(Dataset):
         """
         self.root_dir = Path(root_dir)
         self.samples = load_scantinel_dataset_folder(self.root_dir)
-        self.transform = transforms.Compose([ 
-            #transforms.Resize((512, 512)),  # Resize to 224x224
-            transforms.PILToTensor(),
-        ])
+        self.transform = transforms.PILToTensor()
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample["image"]).convert("RGB")  # Convert to RGB format
-        pointcloud = sample["pointcloud"]  # shape: (N, 6)
-        image_tensor = self.transform(image)
-        image.close()  # Close the image file to free resources
-
+        with Image.open(sample["image"]) as img:
+            image_tensor = self.transform(img.convert("RGB"))
+        pointcloud = sample["pointcloud"]
 
         return {
             "pointcloud": pointcloud, 
@@ -38,7 +34,7 @@ class ScantinelDataset(Dataset):
         }
 
 class HerculesDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, transform=None):
         """
         PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
 
@@ -47,24 +43,35 @@ class HerculesDataset(Dataset):
         """
         self.root_dir = Path(root_dir)
         self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True)
-        self.transform = transforms.Compose([
-            transforms.PILToTensor(),
-        ])
+        self.transform_factory = transform if transform is not None else transforms.ToTensor()
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample["right_image"]).convert("RGB")
+
+        with Image.open(sample["right_image"]).convert("RGB") as img:
+            transforms = self.transform_factory.get_transform((img.width, img.height)) if hasattr(self.transform_factory, 'get_transform') else self.transform_factory
+            image_tensor = transforms.transform(img)
+
         pointcloud = sample["pointcloud"]
-        image_tensor = self.transform(image)
-        image.close()
-        
+        input_size = transforms.resize_size
+        feature_map_size = transforms.feature_map_size
+
+        intrinsics = sample["stereo_right_intrinsics"]
+        intrinsics = scale_intrinsics(
+                intrinsics, 
+                (img.width, img.height),  # (W, H)
+                input_size
+            )
+
         return {
-            "pointcloud": pointcloud,
+            "pointcloud": torch.from_numpy(pointcloud),  # torch.Tensor, shape [N, 4]
             "image_tensor": image_tensor,
             "timestamps": sample["timestamps"],
-            "intrinsics": sample["stereo_right_intrinsics"],
-            "extrinsics": sample["lidar_to_stereo_right_extrinsic"]
+            "intrinsics": torch.from_numpy(intrinsics),
+            "extrinsics": torch.from_numpy(sample["lidar_to_stereo_right_extrinsic"]),
+            "input_size": input_size,
+            "feature_map_size": feature_map_size
         }

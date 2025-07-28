@@ -22,40 +22,32 @@ class Extractor:
         self.dino_model = dino_model
         self.clip_model = clip_model
         self.model = load_model(model_name=self.dino_model)
-        self.extractor = DinoFeatureExtractor(self.model)
+        self.extractor = DinoFeatureExtractor(self.model, device="cuda" if torch.cuda.is_available() else "cpu")
         self.transform_factory=TransformFactory(model_name=self.dino_model, patch_size=self.model.patch_size)
         self.pca = PCAModule(n_components=3)
 
-    def extract_dino_features(self, image, filename: str = "single_file"):
+    def extract_dino_features(self, images: torch.Tensor):
         """
-        Extracts features from a single image using the Dinov2 model.
-        
-        Parameters:
-            image (Image.Image): The input image from which features are to be extracted.
-            filename (str): The name of the file to be used for feature extraction. Default is "single_file".
-        Returns:
-            dict: A dictionary containing the filename, extracted features, input size, and feature map size.
+        Extracts features from a batch of images using the Dinov2 model.
+        Args:
+            images: torch.Tensor of shape [B, C, H, W]
         """
+        # images: [B, C, H, W] torch.Tensor 
+        batch_size = images.shape[0]
+        #transform = self.transform_factory.get_transform((images.shape[3], images.shape[2]))
+        #input_size = transform.resize_size
+        #feature_map_size = transform.feature_map_size
         
-        #print(f"Processing image: {filename}")
-        #print(f"Image size: {image.size}")
-
-        transform = self.transform_factory.get_transform(image.size)
-        input_size = transform.resize_size
-        feature_map_size = transform.feature_map_size
-        logger.info("Model:", self.dino_model)
-        logger.info(f"Input size: {input_size}")
-        logger.info(f"Patch size: {self.model.patch_size}")
-        logger.info(f"Feature map size: {feature_map_size}")
-
-        images_tensor = transform.transform(image).unsqueeze(0)
-        features = self.extractor(images_tensor)
-        return {
-            "filename": filename,
-            "features": features,
-            "input_size": input_size,
-            "feature_map_size": feature_map_size,
-        } 
+        features = self.extractor(images)
+        """ results = []
+        for i in range(batch_size):
+            results.append({
+                #"filename": filenames[i] if filenames is not None else f"frame_{i:05d}",
+                "features": features[i],
+                #"input_size": input_size,
+                #"feature_map_size": feature_map_size,
+            }) """
+        return features
         
 
     def visualize_dino_features(self, image: torch.Tensor, features: LocalFeatures, input_size: tuple, feature_map_size: tuple, filename: str = "single_image", only_pca: bool = False, visualize: bool = False):
