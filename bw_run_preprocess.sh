@@ -9,7 +9,6 @@
 #SBATCH -t 00:30:00 
 #SBATCH -p dev_gpu_h100
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-gpu=8
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
