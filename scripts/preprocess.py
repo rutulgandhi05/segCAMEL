@@ -148,9 +148,14 @@ def preprocess_and_save_hercules(
     print(f"Preprocessing completed in {total_time:.1f}s ({frame_counter} frames)")
 
 if __name__ == "__main__":
+    import os
+    save_root = os.getenv("HERCULES_PREPROCESS")
+    if not save_root:
+        raise ValueError("Please set the HERCULES_PREPROCESS environment variable to specify where to save processed data.")
+    save_dir = os.path.join(save_root, "Mountain_01_Day/processed_data")
     preprocess_and_save_hercules(
         root_dir="data/hercules/Mountain_01_Day/",
-        save_dir="data/hercules/Mountain_01_Day/processed_data",
+        save_dir=save_dir,
         workers=8,
         batch_size=16,     # try bumping up to 16 or 32 if GPU memory allows
         prefetch_factor=4  # tune based on your I/O vs CPU/GPU balance
