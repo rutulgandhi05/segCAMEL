@@ -41,7 +41,7 @@ def preprocess_and_save_hercules(
     extractor = Extractor()
     dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)
     dataset_len = len(dataset)
-
+    print(f"Dataset length: {dataset_len}")
     # --- DataLoader with persistent workers & prefetching ---
     dataloader = DataLoader(
         dataset,

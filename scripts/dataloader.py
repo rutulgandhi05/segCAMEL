@@ -42,6 +42,7 @@ class HerculesDataset(Dataset):
             root_dir (str or Path): Dataset folder.
         """
         self.root_dir = Path(root_dir)
+        print(f"Loading Hercules dataset from {self.root_dir}")
         self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True, max_workers=max_workers)
         self.transform_factory = transform if transform is not None else transforms.ToTensor()
 
