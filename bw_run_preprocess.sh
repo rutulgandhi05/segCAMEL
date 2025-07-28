@@ -4,12 +4,12 @@
 #SBATCH -o preprocess_output.txt
 #SBATCH -e preprocess_error.txt
 #SBATCH -c 8
-#SBATCH -N 1
-#SBATCH -n 1
-#SBATCH -t 00:60:00 
-#SBATCH -p gpu_h100
-#SBATCH --gres=gpu:2
-#SBATCH --mem=64000
+#SBATCH -N 4    
+#SBATCH -n 2
+#SBATCH -t 00:30:00 
+#SBATCH -p gpu_a100_short
+#SBATCH --gres=gpu:4
+#SBATCH --mem=94000
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
