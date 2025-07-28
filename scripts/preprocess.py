@@ -36,6 +36,7 @@ def preprocess_and_save_hercules(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"root_dir: {root_dir}   save_dir: {save_dir}")
     # --- extractor and dataset ---
     extractor = Extractor()
     dataset = HerculesDataset(root_dir, transform=extractor.transform_factory)
