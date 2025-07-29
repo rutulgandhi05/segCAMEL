@@ -80,18 +80,6 @@ def train(
     feat = sample["feat"].to(device)
     dino_feat = sample["dino_feat"].to(device)
 
-
-    #if input_mode == "dino_only":
-    #    input_feat = dino_feat
-    #elif input_mode == "vri_dino":
-    #    input_feat = torch.cat([feat, dino_feat], dim=1)
-    #elif input_mode == "coord_dino":
-    #    input_feat = torch.cat([coord, dino_feat], dim=1)
-    #elif input_mode == "coord_vri_dino":
-    #    input_feat = torch.cat([coord, feat, dino_feat], dim=1)
-    #else:
-    #    raise ValueError(f"Unknown input_mode: {input_mode}")
-
     input_feat = torch.cat([coord, feat], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = dino_feat.shape[1]
@@ -118,16 +106,15 @@ def train(
                 feat = samples["feat"].to(device)
                 dino_feat = samples["dino_feat"].to(device)
                 grid_size = samples["grid_size"]
-
                 input_feat = torch.cat([coord, feat], dim=1)  # [N, 6]
 
-                if not (0.01 <= grid_size <= 1.0):
-                    grid_size = 0.05
+                #if not (0.01 <= grid_size <= 1.0):
+                #    grid_size = 0.05
 
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
                 if grid_coord.max() > 2**15:
-                    logger.warning(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
+                    print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
                     grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
                     grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
