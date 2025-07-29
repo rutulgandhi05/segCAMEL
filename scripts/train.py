@@ -116,7 +116,7 @@ def train(
     input_feat = torch.cat([sample["coord"], sample["feat"]], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = sample["dino_feat"].shape[1]
-    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={coord.shape[1]}, feat_dim={feat.shape[1]}")
+    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={sample["coord"].shape[1]}, feat_dim={sample["feat"].shape[1]}")
     
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
