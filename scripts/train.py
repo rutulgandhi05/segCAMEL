@@ -49,6 +49,40 @@ def safe_grid_coord(coord, grid_size, logger=None):
 
     return grid_coord
 
+def collate_for_ptv3(batch):
+    collated = {
+        "coord": [],
+        "feat": [],
+        "dino_feat": [],
+        "grid_size": [],
+        "batch": [],
+        "offset": [],
+    }
+
+    offset = 0
+    for batch_id, sample in enumerate(batch):
+        coord = sample["coord"]
+        feat = sample["feat"]
+        dino = sample["dino_feat"]
+        N = coord.shape[0]
+
+        collated["coord"].append(coord)
+        collated["feat"].append(feat)
+        collated["dino_feat"].append(dino)
+        collated["grid_size"].append(sample["grid_size"])
+
+        collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
+        offset += N
+        collated["offset"].append(offset)
+
+    for k in ["coord", "feat", "dino_feat", "batch"]:
+        collated[k] = torch.cat(collated[k], dim=0)
+
+    collated["grid_size"] = torch.tensor(collated["grid_size"])
+    collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
+
+    return collated
+
 def train(
     data_dir=Path,
     epochs=20,
@@ -69,7 +103,8 @@ def train(
                             shuffle=True,
                             num_workers=8,
                             pin_memory=True,
-                            persistent_workers=True
+                            persistent_workers=True,
+                            collate_fn=collate_for_ptv3
                             )
 
     print(f"Loaded {len(dataset)} preprocessed samples")
@@ -79,7 +114,6 @@ def train(
     coord = sample["coord"].to(device)
     feat = sample["feat"].to(device)
     dino_feat = sample["dino_feat"].to(device)
-
     input_feat = torch.cat([coord, feat], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = dino_feat.shape[1]
@@ -99,21 +133,18 @@ def train(
 
         for batch_idx, samples in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
-                if isinstance(samples, list) or isinstance(samples, tuple):
-                    samples = samples[0]
-
                 coord = samples["coord"].to(device)
                 feat = samples["feat"].to(device)
                 dino_feat = samples["dino_feat"].to(device)
-                grid_size = samples["grid_size"]
-                input_feat = torch.cat([coord, feat], dim=1)  # [N, 6]
+                grid_size = samples["grid_size"].mean().item()
+                batch_tensor = samples["batch"].to(device)
+                offset = samples["offset"].to(device)
 
-                #if not (0.01 <= grid_size <= 1.0):
-                #    grid_size = 0.05
-
+                input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-                if grid_coord.max() > 2**15:
+
+                """ if grid_coord.max() > 2**15:
                     print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
                     grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
                     grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
@@ -129,7 +160,7 @@ def train(
                     print(f"Input feat shape: {input_feat.shape}")
                     print(f"Grid coord shape: {grid_coord.shape}")
                     print(f"Offset: {offset}")
-                    print(f"Batch shape: {batch_tensor.shape}")
+                    print(f"Batch shape: {batch_tensor.shape}") """
 
 
                 data_dict = {
@@ -153,9 +184,8 @@ def train(
 
                 total_loss += loss.item()
 
-                
             except Exception as e:
-                logger.error(f"Error processing batch {batch_idx}: {str(e)}")
+                print(f"Error processing batch {batch_idx}: {str(e)}")
                 raise e
 
         avg_loss = total_loss / len(dataloader)
