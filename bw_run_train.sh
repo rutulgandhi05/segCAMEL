@@ -15,6 +15,6 @@
 export HERCULES_DATASET=$(ws_find hercules_dataset)
 source venv/bin/activate
 module load devel/cuda/12.8
-python -m scripts.train
+CUDA_LAUNCH_BLOCKING=1 python -m scripts.train
 
 

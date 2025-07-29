@@ -165,6 +165,19 @@ def train(
 
                 optimizer.zero_grad()
                 with autocast(device_type=device):
+
+                    if grid_coord.shape[0] != input_feat.shape[0]:
+                        print(f"[ERROR] grid_coord and feat mismatch: {grid_coord.shape}, {input_feat.shape}")
+                        raise ValueError("grid_coord / feat shape mismatch")
+
+                    if torch.any(torch.isnan(input_feat)):
+                        print("[ERROR] NaNs in input_feat")
+                        raise ValueError("NaNs in input_feat")
+
+                    if grid_coord.max().item() > 1e6:
+                        print(f"[ERROR] Suspiciously large grid_coord.max(): {grid_coord.max()}")
+                        raise ValueError("Unrealistic grid_coord")
+                    
                     output = model(data_dict)
                     pred = output.feat
                     pred_proj = proj_head(pred)
@@ -205,7 +218,7 @@ if __name__ == "__main__":
     train(
         data_dir=data_dir,
         epochs=20,
-        batch_size=8,
+        batch_size=4,
         lr=1e-3,
         save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
         input_mode="vri_dino"
