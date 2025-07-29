@@ -196,7 +196,7 @@ if __name__ == "__main__":
     train(
         data_dir=data_dir,
         epochs=20,
-        batch_size=16,
+        batch_size=8,
         lr=1e-3,
         save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
         input_mode="vri_dino"
