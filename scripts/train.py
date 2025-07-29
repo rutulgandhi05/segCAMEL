@@ -80,6 +80,9 @@ def train(
     feat = sample["feat"].to(device)
     dino_feat = sample["dino_feat"].to(device)
 
+    print("feat.shape:", feat.shape)
+    print("dino_feat.shape:", dino_feat.shape)
+    
     if input_mode == "dino_only":
         input_feat = dino_feat
     elif input_mode == "vri_dino":
