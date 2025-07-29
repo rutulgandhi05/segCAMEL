@@ -4,6 +4,7 @@ from tqdm import tqdm
 from pathlib import Path
 from utils.misc import setup_logger
 from models.PTv3.model import PointTransformerV3
+from torch.amp import GradScaler, autocast
 
 import torch
 import torch.nn.functional as F
@@ -25,30 +26,7 @@ class PointCloudDataset(torch.utils.data.Dataset):
             "dino_feat": sample["dino_feat"],
             "grid_size": float(sample.get("grid_size", 0.05))
         }
-
-def distillation_loss(pred_feat, target_feat):
-    pred = F.normalize(pred_feat, dim=1)
-    target = F.normalize(target_feat, dim=1)
-    return 1 - (pred * target).sum(dim=1).mean()
-
-def safe_grid_coord(coord, grid_size, logger=None):
-    if not torch.is_tensor(grid_size):
-        grid_size = torch.tensor(grid_size, device=coord.device)
-    else:
-        grid_size = grid_size.to(coord.device)
-
-    coord_min = coord.min(0)[0]
-    grid_coord = ((coord - coord_min) / grid_size).floor().int()
-
-    for axis in range(3):
-        n_unique = len(torch.unique(grid_coord[:, axis]))
-        if n_unique < 2:
-            if logger:
-                logger.warning(f"Axis {axis} of grid_coord has only {n_unique} unique value! Forcing two values.")
-            grid_coord[:, axis] += torch.arange(grid_coord.shape[0], device=grid_coord.device) % 2
-
-    return grid_coord
-
+    
 def collate_for_ptv3(batch):
     collated = {
         "coord": [],
@@ -83,14 +61,38 @@ def collate_for_ptv3(batch):
 
     return collated
 
+def distillation_loss(pred_feat, target_feat):
+    pred = F.normalize(pred_feat, dim=1)
+    target = F.normalize(target_feat, dim=1)
+    return 1 - (pred * target).sum(dim=1).mean()
+
+def safe_grid_coord(coord, grid_size, logger=None):
+    if not torch.is_tensor(grid_size):
+        grid_size = torch.tensor(grid_size, device=coord.device)
+    else:
+        grid_size = grid_size.to(coord.device)
+
+    coord_min = coord.min(0)[0]
+    grid_coord = ((coord - coord_min) / grid_size).floor().int()
+
+    for axis in range(3):
+        n_unique = len(torch.unique(grid_coord[:, axis]))
+        if n_unique < 2:
+            if logger:
+                logger.warning(f"Axis {axis} of grid_coord has only {n_unique} unique value! Forcing two values.")
+            grid_coord[:, axis] += torch.arange(grid_coord.shape[0], device=grid_coord.device) % 2
+
+    return grid_coord
+
+
 def train(
     data_dir=Path,
     epochs=20,
-    batch_size=8,
+    batch_size=16,
     lr=1e-3,
     save_path=Path,
     device="cuda" if torch.cuda.is_available() else "cpu",
-    input_mode="dino_only",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
+    input_mode="vri_dino",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
 ):
     logger = setup_logger()
     print(f"Starting training on device: {device}")
@@ -122,6 +124,7 @@ def train(
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
     optimizer = torch.optim.Adam(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
+    scaler = GradScaler(device=device)
 
     best_loss = float("inf")
 
@@ -143,26 +146,6 @@ def train(
                 input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-
-                """ if grid_coord.max() > 2**15:
-                    print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
-                    grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
-                    grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
-
-                num_points = coord.shape[0]
-                batch_tensor  = torch.zeros(num_points, dtype=torch.long, device=device)
-                offset = torch.tensor([num_points], dtype=torch.long, device=device)
-
-                # Debug info (first batch, first epoch)
-                if epoch == 0 and batch_idx == 0:
-                    print(f"Grid size used: {grid_size}")
-                    print(f"Coord shape: {coord.shape}")
-                    print(f"Input feat shape: {input_feat.shape}")
-                    print(f"Grid coord shape: {grid_coord.shape}")
-                    print(f"Offset: {offset}")
-                    print(f"Batch shape: {batch_tensor.shape}") """
-
-
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
@@ -173,15 +156,17 @@ def train(
                 }
 
                 optimizer.zero_grad()
-                output = model(data_dict)
-                pred = output.feat
-                pred_proj = proj_head(pred)
+                with autocast(device_type=device):
+                    output = model(data_dict)
+                    pred = output.feat
+                    pred_proj = proj_head(pred)
 
-                valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
-                loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
-                loss.backward()
-                optimizer.step()
-
+                    valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
+                    loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
+                    
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 total_loss += loss.item()
 
             except Exception as e:
@@ -211,7 +196,7 @@ if __name__ == "__main__":
     train(
         data_dir=data_dir,
         epochs=20,
-        batch_size=1,
+        batch_size=16,
         lr=1e-3,
         save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
         input_mode="vri_dino"
