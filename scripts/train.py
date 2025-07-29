@@ -146,6 +146,11 @@ def train(
                 input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
+                if grid_coord.max() > 2**15:
+                    print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
+                    grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
+                    grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
+                
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
@@ -167,6 +172,7 @@ def train(
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                torch.cuda.empty_cache()
                 total_loss += loss.item()
 
             except Exception as e:
