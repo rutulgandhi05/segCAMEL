@@ -197,8 +197,10 @@ if __name__ == "__main__":
         s_coord = d["coord"].shape
         s_feat = d["feat"].shape
         s_dino = d["dino_feat"].shape
+        
         if not (s_coord[0] == s_feat[0] == s_dino[0]):
             print(f"BAD FILE: {f.name} | coord: {s_coord}, feat: {s_feat}, dino_feat: {s_dino}")
+        print(f"GOOD FILE: {f.name} | coord: {s_coord}, feat: {s_feat}, dino_feat: {s_dino}") 
     """ train(
         data_dir=data_dir,
         epochs=20,
