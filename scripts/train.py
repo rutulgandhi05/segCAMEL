@@ -52,7 +52,7 @@ def safe_grid_coord(coord, grid_size, logger=None):
 def train(
     data_dir=Path,
     epochs=20,
-    batch_size=1,
+    batch_size=8,
     lr=1e-3,
     save_path=Path,
     device="cuda" if torch.cuda.is_available() else "cpu",
