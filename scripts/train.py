@@ -204,7 +204,7 @@ def train(
                     loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
                     
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
+                scaler.step(optimizer) 
                 scaler.update()
                 torch.cuda.empty_cache()
                 total_loss += loss.item()
