@@ -80,20 +80,26 @@ def train(
     feat = sample["feat"].to(device)
     dino_feat = sample["dino_feat"].to(device)
 
-    print("feat.shape:", feat.dim())
-    print("dino_feat.shape:", dino_feat.dim())
+    # N=1 edge case
+    if coord.ndim == 1:
+        coord = coord[None, :]
+    if feat.ndim == 1:
+        feat = feat[None, :]
+    if dino_feat.ndim == 1:
+        dino_feat = dino_feat[None, :]
 
-    if input_mode == "dino_only":
-        input_feat = dino_feat
-    elif input_mode == "vri_dino":
-        input_feat = torch.cat([feat, dino_feat], dim=1)
-    elif input_mode == "coord_dino":
-        input_feat = torch.cat([coord, dino_feat], dim=1)
-    elif input_mode == "coord_vri_dino":
-        input_feat = torch.cat([coord, feat, dino_feat], dim=1)
-    else:
-        raise ValueError(f"Unknown input_mode: {input_mode}")
+    #if input_mode == "dino_only":
+    #    input_feat = dino_feat
+    #elif input_mode == "vri_dino":
+    #    input_feat = torch.cat([feat, dino_feat], dim=1)
+    #elif input_mode == "coord_dino":
+    #    input_feat = torch.cat([coord, dino_feat], dim=1)
+    #elif input_mode == "coord_vri_dino":
+    #    input_feat = torch.cat([coord, feat, dino_feat], dim=1)
+    #else:
+    #    raise ValueError(f"Unknown input_mode: {input_mode}")
 
+    input_feat = torch.cat([coord, feat], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = dino_feat.shape[1]
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
@@ -120,6 +126,8 @@ def train(
                 dino_feat = samples["dino_feat"].to(device)
                 grid_size = samples["grid_size"]
 
+                input_feat = torch.cat([coord, feat], dim=1)  # [N, 6]
+
                 if not (0.01 <= grid_size <= 1.0):
                     grid_size = 0.05
 
@@ -134,15 +142,6 @@ def train(
                 batch_tensor  = torch.zeros(num_points, dtype=torch.long, device=device)
                 offset = torch.tensor([num_points], dtype=torch.long, device=device)
 
-                if input_mode == "dino_only":
-                    input_feat = dino_feat
-                elif input_mode == "vri_dino":
-                    input_feat = torch.cat([feat, dino_feat], dim=1)
-                elif input_mode == "coord_dino":
-                    input_feat = torch.cat([coord, dino_feat], dim=1)
-                elif input_mode == "coord_vri_dino":
-                    input_feat = torch.cat([coord, feat, dino_feat], dim=1)
-                
                 # Debug info (first batch, first epoch)
                 if epoch == 0 and batch_idx == 0:
                     print(f"Grid size used: {grid_size}")
