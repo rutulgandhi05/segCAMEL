@@ -91,8 +91,8 @@ def train(
     else:
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
-    input_dim = input_feat.shape[1].to(device)
-    dino_dim = dino_feat.shape[1].to(device)
+    input_dim = input_feat.shape[1]
+    dino_dim = dino_feat.shape[1]
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
     
     model = PointTransformerV3(in_channels=input_dim).to(device)
