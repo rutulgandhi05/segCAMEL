@@ -163,21 +163,39 @@ def train(
                     "batch": batch_tensor ,
                 }
 
-                optimizer.zero_grad()
-                with autocast(device_type=device):
+                # ========== SANITY CHECKS ========== #
+                if input_feat.shape[0] != grid_coord.shape[0]:
+                    raise ValueError(f"[ERROR] Input feat and grid_coord mismatch: {input_feat.shape} vs {grid_coord.shape}")
 
-                    if grid_coord.shape[0] != input_feat.shape[0]:
+                if torch.any(torch.isnan(input_feat)) or torch.any(torch.isnan(grid_coord)):
+                    raise ValueError("[ERROR] NaNs detected in input_feat or grid_coord")
+
+                if torch.any(torch.isinf(input_feat)) or torch.any(torch.isinf(grid_coord)):
+                    raise ValueError("[ERROR] Infs detected in input_feat or grid_coord")
+
+                if grid_coord.shape[0] == 0 or input_feat.shape[0] == 0:
+                    raise ValueError("[ERROR] Zero points in sample")
+
+                # Optional: debug print of extreme grid values
+                if grid_coord.max() > 50000:
+                    print(f"[WARN] Unusually large grid_coord.max(): {grid_coord.max()}")
+
+                if grid_coord.shape[0] != input_feat.shape[0]:
                         print(f"[ERROR] grid_coord and feat mismatch: {grid_coord.shape}, {input_feat.shape}")
                         raise ValueError("grid_coord / feat shape mismatch")
 
-                    if torch.any(torch.isnan(input_feat)):
-                        print("[ERROR] NaNs in input_feat")
-                        raise ValueError("NaNs in input_feat")
+                if torch.any(torch.isnan(input_feat)):
+                    print("[ERROR] NaNs in input_feat")
+                    raise ValueError("NaNs in input_feat")
 
-                    if grid_coord.max().item() > 1e6:
-                        print(f"[ERROR] Suspiciously large grid_coord.max(): {grid_coord.max()}")
-                        raise ValueError("Unrealistic grid_coord")
+                if grid_coord.max().item() > 1e6:
+                    print(f"[ERROR] Suspiciously large grid_coord.max(): {grid_coord.max()}")
+                    raise ValueError("Unrealistic grid_coord")
                     
+
+                optimizer.zero_grad()
+                with autocast(device_type=device):
+
                     output = model(data_dict)
                     pred = output.feat
                     pred_proj = proj_head(pred)
