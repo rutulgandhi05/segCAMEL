@@ -32,15 +32,21 @@ def distillation_loss(pred_feat, target_feat):
     return 1 - (pred * target).sum(dim=1).mean()
 
 def safe_grid_coord(coord, grid_size, logger=None):
+    if not torch.is_tensor(grid_size):
+        grid_size = torch.tensor(grid_size, device=coord.device)
+    else:
+        grid_size = grid_size.to(coord.device)
+
     coord_min = coord.min(0)[0]
     grid_coord = ((coord - coord_min) / grid_size).floor().int()
-    # Ensure at least two unique values per axis for Hilbert code
+
     for axis in range(3):
         n_unique = len(torch.unique(grid_coord[:, axis]))
         if n_unique < 2:
             if logger:
                 logger.warning(f"Axis {axis} of grid_coord has only {n_unique} unique value! Forcing two values.")
-            grid_coord[:, axis] += torch.arange(grid_coord.shape[0]) % 2
+            grid_coord[:, axis] += torch.arange(grid_coord.shape[0], device=grid_coord.device) % 2
+
     return grid_coord
 
 def train(
@@ -53,9 +59,9 @@ def train(
     input_mode="dino_only",   # Options: 'dino_only', 'vri_dino', 'coord_dino', 'coord_vri_dino'
 ):
     logger = setup_logger()
-    logger.info(f"Starting training on device: {device}")
-    logger.info(f"Training data: {data_dir}")
-    logger.info(f"Input mode: {input_mode}")
+    print(f"Starting training on device: {device}")
+    print(f"Training data: {data_dir}")
+    print(f"Input mode: {input_mode}")
 
     dataset = PointCloudDataset(data_dir)
     dataloader = DataLoader(dataset, 
@@ -66,13 +72,13 @@ def train(
                             persistent_workers=True
                             )
 
-    logger.info(f"Loaded {len(dataset)} preprocessed samples")
+    print(f"Loaded {len(dataset)} preprocessed samples")
 
     # --- Infer input_dim robustly based on input_mode and first sample
     sample = dataset[0]
-    coord = sample["coord"]
-    feat = sample["feat"]
-    dino_feat = sample["dino_feat"]
+    coord = sample["coord"].to(device)
+    feat = sample["feat"].to(device)
+    dino_feat = sample["dino_feat"].to(device)
 
     if input_mode == "dino_only":
         input_feat = dino_feat
@@ -85,9 +91,9 @@ def train(
     else:
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
-    input_dim = input_feat.shape[1]
-    dino_dim = dino_feat.shape[1]
-    logger.info(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
+    input_dim = input_feat.shape[1].to(device)
+    dino_dim = dino_feat.shape[1].to(device)
+    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
     
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
@@ -99,7 +105,7 @@ def train(
         model.train()
         proj_head.train()
         total_loss = 0
-        logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+        print(f"\nEpoch {epoch + 1}/{epochs}")
 
         for batch_idx, samples in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
@@ -133,6 +139,16 @@ def train(
                     input_feat = torch.cat([coord, dino_feat], dim=1)
                 elif input_mode == "coord_vri_dino":
                     input_feat = torch.cat([coord, feat, dino_feat], dim=1)
+                
+                # Debug info (first batch, first epoch)
+                if epoch == 0 and batch_idx == 0:
+                    print(f"Grid size used: {grid_size}")
+                    print(f"Coord shape: {coord.shape}")
+                    print(f"Input feat shape: {input_feat.shape}")
+                    print(f"Grid coord shape: {grid_coord.shape}")
+                    print(f"Offset: {offset}")
+                    print(f"Batch shape: {batch_tensor.shape}")
+
 
                 data_dict = {
                     "coord": coord,
@@ -155,21 +171,13 @@ def train(
 
                 total_loss += loss.item()
 
-                # Debug info (first batch, first epoch)
-                if epoch == 0 and batch_idx == 0:
-                    logger.info(f"Grid size used: {grid_size}")
-                    logger.info(f"Coord shape: {coord.shape}")
-                    logger.info(f"Input feat shape: {input_feat.shape}")
-                    logger.info(f"Grid coord shape: {grid_coord.shape}")
-                    logger.info(f"Offset: {offset}")
-                    logger.info(f"Batch shape: {batch_tensor.shape}")
-
+                
             except Exception as e:
                 logger.error(f"Error processing batch {batch_idx}: {str(e)}")
                 raise e
 
         avg_loss = total_loss / len(dataloader)
-        logger.info(f"Avg Loss = {avg_loss:.6f}")
+        print(f"Avg Loss = {avg_loss:.6f}")
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -178,9 +186,9 @@ def train(
                 "model": model.state_dict(),
                 "proj_head": proj_head.state_dict()
             }, save_path)
-            logger.info(f"Best model saved to {save_path} (loss = {avg_loss:.6f})")
+            print(f"Best model saved to {save_path} (loss = {avg_loss:.6f})")
 
-    logger.info("Training complete.")
+    print("Training complete.")
 
 if __name__ == "__main__":
     dataset_env = os.getenv("HERCULES_DATASET")
