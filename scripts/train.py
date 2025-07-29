@@ -113,12 +113,9 @@ def train(
 
     # --- Infer input_dim robustly based on input_mode and first sample
     sample = dataset[0]
-    coord = sample["coord"].to(device)
-    feat = sample["feat"].to(device)
-    dino_feat = sample["dino_feat"].to(device)
-    input_feat = torch.cat([coord, feat], dim=1)
+    input_feat = torch.cat([sample["coord"], sample["feat"]], dim=1)
     input_dim = input_feat.shape[1]
-    dino_dim = dino_feat.shape[1]
+    dino_dim = sample["dino_feat"].shape[1]
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={coord.shape[1]}, feat_dim={feat.shape[1]}")
     
     model = PointTransformerV3(in_channels=input_dim).to(device)
@@ -146,11 +143,17 @@ def train(
                 input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
-                if grid_coord.max() > 2**15:
-                    print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
-                    grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
+                max_grid_val = grid_coord.max().item()
+                if max_grid_val > 32768:
+                    new_grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
+                    print(f"[WARN] grid_coord.max={max_grid_val}. Using coarser grid_size={new_grid_size:.5f}")
+                    grid_size = new_grid_size
                     grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
-                
+
+                if epoch == 0 and batch_idx == 0:
+                    print(f"[DEBUG] grid_coord.max={grid_coord.max()}, grid_size={grid_size:.5f}")
+
+
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
