@@ -80,13 +80,6 @@ def train(
     feat = sample["feat"].to(device)
     dino_feat = sample["dino_feat"].to(device)
 
-    # N=1 edge case
-    if coord.ndim == 1:
-        coord = coord[None, :]
-    if feat.ndim == 1:
-        feat = feat[None, :]
-    if dino_feat.ndim == 1:
-        dino_feat = dino_feat[None, :]
 
     #if input_mode == "dino_only":
     #    input_feat = dino_feat
@@ -102,7 +95,7 @@ def train(
     input_feat = torch.cat([coord, feat], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = dino_feat.shape[1]
-    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
+    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={coord.shape[1]}, feat_dim={feat.shape[1]}")
     
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
