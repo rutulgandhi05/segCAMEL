@@ -158,7 +158,7 @@ if __name__ == "__main__":
     
     data_root = Path(str(data_root))
     root_dir = data_root / "Mountain_01_Day"
-    save_dir = data_root / "processed_data"
+    save_dir = data_root / "Mountain_01_Day" / "processed_data"
 
     preprocess_and_save_hercules(
         root_dir=root_dir,
