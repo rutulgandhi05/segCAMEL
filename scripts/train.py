@@ -191,7 +191,15 @@ if __name__ == "__main__":
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
 
     data_dir = Path(dataset_env) / "Mountain_01_Day" / "processed_data"
-    train(
+
+    for f in data_dir.glob("*.pth"):
+        d = torch.load(f)
+        s_coord = d["coord"].shape
+        s_feat = d["feat"].shape
+        s_dino = d["dino_feat"].shape
+        if not (s_coord[0] == s_feat[0] == s_dino[0]):
+            print(f"BAD FILE: {f.name} | coord: {s_coord}, feat: {s_feat}, dino_feat: {s_dino}")
+    """ train(
         data_dir=data_dir,
         epochs=20,
         batch_size=1,
@@ -199,3 +207,4 @@ if __name__ == "__main__":
         save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
         input_mode="vri_dino"
     )
+ """
