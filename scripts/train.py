@@ -202,7 +202,7 @@ def train(
 
                     valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
                     loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
-                    
+                    print(f"Batch {batch_idx}: Loss = {loss.item():.6f}")
                 scaler.scale(loss).backward()
                 scaler.step(optimizer) 
                 scaler.update()
