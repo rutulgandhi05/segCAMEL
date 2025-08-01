@@ -191,6 +191,20 @@ def train(
                 if grid_coord.max().item() > 1e6:
                     print(f"[ERROR] Suspiciously large grid_coord.max(): {grid_coord.max()}")
                     raise ValueError("Unrealistic grid_coord")
+                
+                if torch.isnan(input_feat).any():
+                    print("[ERROR] NaN detected in input_feat, skipping batch")
+                    
+
+                # after model forward
+                if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
+                    print("[ERROR] NaN or Inf detected in model output, skipping batch")
+                    
+
+                # after proj_head
+                if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
+                    print("[ERROR] NaN or Inf detected in pred_proj, skipping batch")
+                    
                     
 
                 optimizer.zero_grad()
