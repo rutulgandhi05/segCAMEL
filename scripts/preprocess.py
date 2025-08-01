@@ -30,7 +30,8 @@ def preprocess_and_save_hercules(
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     workers: int = 8,
     batch_size: int = 8,
-    prefetch_factor: int = 2
+    prefetch_factor: int = 2,
+    frame_counter: int = 0
 ):
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
@@ -72,7 +73,7 @@ def preprocess_and_save_hercules(
     writer_thread.start()
 
     start_time = time.time()
-    frame_counter = 0
+    frame_counter = frame_counter
 
     # --- main loop ---
     for batch in tqdm(dataloader, desc="Processing frames", unit="batch"):
@@ -148,6 +149,8 @@ def preprocess_and_save_hercules(
     total_time = time.time() - start_time
     print(f"Preprocessing completed in {total_time:.1f}s ({frame_counter} frames)")
 
+    return frame_counter
+
 if __name__ == "__main__":
     import os
     
@@ -157,13 +160,23 @@ if __name__ == "__main__":
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     
     data_root = Path(str(data_root))
-    root_dir = data_root / "Mountain_01_Day"
-    save_dir = data_root / "Mountain_01_Day" / "processed_data"
+    folders = ["Mountain_01_Day", "Library_01_Day"]
 
-    preprocess_and_save_hercules(
-        root_dir=root_dir,
-        save_dir=save_dir,
-        workers=8,
-        batch_size=16,     
-        prefetch_factor=4  # tune based on your I/O vs CPU/GPU balance
-    )
+    frame_counter = 0
+    for folder in folders:
+        root_dir = data_root / folder / "raw_data"
+        save_dir = data_root / folder / "processed_data"
+
+        last_frame = preprocess_and_save_hercules(
+            root_dir=root_dir,
+            save_dir=save_dir,
+            workers=8,
+            batch_size=16,     
+            prefetch_factor=4,  # tune based on your I/O vs CPU/GPU balance
+            frame_counter=frame_counter
+        )
+
+        frame_counter = last_frame
+        print(f"Processed {last_frame} frames in {folder}")
+
+    print(f"Total frames processed: {frame_counter}")
