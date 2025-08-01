@@ -201,6 +201,13 @@ def train(
                     pred_proj = proj_head(pred)
 
                     valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
+
+
+                    print('valid_mask.sum()', valid_mask.sum())
+                    print('pred_proj[valid_mask].shape', pred_proj[valid_mask].shape)
+                    print('dino_feat[valid_mask].shape', dino_feat[valid_mask].shape)
+                    print('Any NaN in pred_proj:', torch.isnan(pred_proj).any().item())
+                    print('Any NaN in dino_feat:', torch.isnan(dino_feat).any().item())
                     loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
                     print(f"Batch {batch_idx}: Loss = {loss.item():.6f}")
                 scaler.scale(loss).backward()
