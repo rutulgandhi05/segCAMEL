@@ -194,17 +194,10 @@ def train(
                 
                 if torch.isnan(input_feat).any():
                     print("[ERROR] NaN detected in input_feat, skipping batch")
-                    
+                    continue
 
                 # after model forward
-                if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
-                    print("[ERROR] NaN or Inf detected in model output, skipping batch")
-                    
-
-                # after proj_head
-                if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
-                    print("[ERROR] NaN or Inf detected in pred_proj, skipping batch")
-                    
+                
                     
 
                 optimizer.zero_grad()
@@ -212,8 +205,16 @@ def train(
 
                     output = model(data_dict)
                     pred = output.feat
-                    pred_proj = proj_head(pred)
+                    if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
+                        print("[ERROR] NaN or Inf detected in model output, skipping batch")
+                        continue
 
+                
+                    pred_proj = proj_head(pred)
+                    # after proj_head
+                    if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
+                        print("[ERROR] NaN or Inf detected in pred_proj, skipping batch")
+                        continue
                     valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
 
 
