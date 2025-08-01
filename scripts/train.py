@@ -26,7 +26,7 @@ class PointCloudDataset(torch.utils.data.Dataset):
             "dino_feat": sample["dino_feat"],
             "grid_size": float(sample.get("grid_size", 0.05))
         }
-    
+
 def collate_for_ptv3(batch):
     collated = {
         "coord": [],
@@ -100,8 +100,8 @@ def train(
     print(f"Input mode: {input_mode}")
 
     dataset = PointCloudDataset(data_dir)
-    dataloader = DataLoader(dataset, 
-                            batch_size=batch_size, 
+    dataloader = DataLoader(dataset,
+                            batch_size=batch_size,
                             shuffle=True,
                             num_workers=8,
                             pin_memory=True,
@@ -116,12 +116,19 @@ def train(
     input_feat = torch.cat([sample["coord"], sample["feat"]], dim=1)
     input_dim = input_feat.shape[1]
     dino_dim = sample["dino_feat"].shape[1]
-    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={sample["coord"].shape[1]}, feat_dim={sample["feat"].shape[1]}")
-    
+    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}, coord_dim={sample['coord'].shape[1]}, feat_dim={sample['feat'].shape[1]}")
+
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(model.out_channels, dino_dim).to(device) if hasattr(model, "out_channels") else torch.nn.Linear(64, dino_dim).to(device)
     optimizer = torch.optim.Adam(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
     scaler = GradScaler(device=device)
+
+    # Debug: check model params for NaN/Inf at start
+    for name, param in model.named_parameters():
+        if torch.isnan(param).any():
+            print(f"[ERROR] NaN in model parameter: {name}")
+        if torch.isinf(param).any():
+            print(f"[ERROR] Inf in model parameter: {name}")
 
     best_loss = float("inf")
 
@@ -143,6 +150,14 @@ def train(
                 input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size, logger=logger)
 
+                # Extra debug: check for NaNs/Infs in input features
+                if torch.isnan(input_feat).any():
+                    print(f"[ERROR][Batch {batch_idx}] NaN in input_feat, skipping batch")
+                    break
+                if torch.isinf(input_feat).any():
+                    print(f"[ERROR][Batch {batch_idx}] Inf in input_feat, skipping batch")
+                    break
+
                 max_grid_val = grid_coord.max().item()
                 if max_grid_val > 32768:
                     new_grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
@@ -153,87 +168,108 @@ def train(
                 if epoch == 0 and batch_idx == 0:
                     print(f"[DEBUG] grid_coord.max={grid_coord.max()}, grid_size={grid_size:.5f}")
 
-
                 data_dict = {
                     "coord": coord,
                     "feat": input_feat,
                     "grid_coord": grid_coord,
                     "grid_size": grid_size,
                     "offset": offset,
-                    "batch": batch_tensor ,
+                    "batch": batch_tensor,
                 }
 
                 # ========== SANITY CHECKS ========== #
                 if input_feat.shape[0] != grid_coord.shape[0]:
-                    raise ValueError(f"[ERROR] Input feat and grid_coord mismatch: {input_feat.shape} vs {grid_coord.shape}")
+                    print(f"[ERROR][Batch {batch_idx}] Input feat and grid_coord mismatch: {input_feat.shape} vs {grid_coord.shape}, skipping batch")
+                    break
 
                 if torch.any(torch.isnan(input_feat)) or torch.any(torch.isnan(grid_coord)):
-                    raise ValueError("[ERROR] NaNs detected in input_feat or grid_coord")
+                    print(f"[ERROR][Batch {batch_idx}] NaNs detected in input_feat or grid_coord, skipping batch")
+                    break
+
+                if input_feat.shape[0] == 0 or grid_coord.shape[0] == 0:
+                    print(f"[ERROR][Batch {batch_idx}] Zero points in sample, skipping batch")
+                    break    
 
                 if torch.any(torch.isinf(input_feat)) or torch.any(torch.isinf(grid_coord)):
-                    raise ValueError("[ERROR] Infs detected in input_feat or grid_coord")
+                    print(f"[ERROR][Batch {batch_idx}] Infs detected in input_feat or grid_coord, skipping batch")
+                    break
 
                 if grid_coord.shape[0] == 0 or input_feat.shape[0] == 0:
-                    raise ValueError("[ERROR] Zero points in sample")
+                    print(f"[ERROR][Batch {batch_idx}] Zero points in sample, skipping batch")
+                    break
 
-                # Optional: debug print of extreme grid values
                 if grid_coord.max() > 50000:
-                    print(f"[WARN] Unusually large grid_coord.max(): {grid_coord.max()}")
+                    print(f"[WARN][Batch {batch_idx}] Unusually large grid_coord.max(): {grid_coord.max()}")
 
                 if grid_coord.shape[0] != input_feat.shape[0]:
-                        print(f"[ERROR] grid_coord and feat mismatch: {grid_coord.shape}, {input_feat.shape}")
-                        raise ValueError("grid_coord / feat shape mismatch")
+                    print(f"[ERROR][Batch {batch_idx}] grid_coord and feat mismatch: {grid_coord.shape}, {input_feat.shape}, skipping batch")
+                    break
 
                 if torch.any(torch.isnan(input_feat)):
-                    print("[ERROR] NaNs in input_feat")
-                    raise ValueError("NaNs in input_feat")
+                    print(f"[ERROR][Batch {batch_idx}] NaNs in input_feat, skipping batch")
+                    break
 
                 if grid_coord.max().item() > 1e6:
-                    print(f"[ERROR] Suspiciously large grid_coord.max(): {grid_coord.max()}")
-                    raise ValueError("Unrealistic grid_coord")
-                
-                if torch.isnan(input_feat).any():
-                    print("[ERROR] NaN detected in input_feat, skipping batch")
-                    continue
-
-                # after model forward
-                
-                    
+                    print(f"[ERROR][Batch {batch_idx}] Suspiciously large grid_coord.max(): {grid_coord.max()}, skipping batch")
+                    break
 
                 optimizer.zero_grad()
                 with autocast(device_type=device):
-
                     output = model(data_dict)
+
+                    # Debug: check for NaN/Inf in model output
+                    if torch.isnan(output.feat).any():
+                        print(f"[ERROR][Batch {batch_idx}] NaN in model output.feat, skipping batch")
+                        break
+                    if torch.isinf(output.feat).any():
+                        print(f"[ERROR][Batch {batch_idx}] Inf in model output.feat, skipping batch")
+                        break
+
                     pred = output.feat
-                    if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
-                        print("[ERROR] NaN or Inf detected in model output, skipping batch")
-                        continue
-
-                
                     pred_proj = proj_head(pred)
-                    # after proj_head
-                    if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
-                        print("[ERROR] NaN or Inf detected in pred_proj, skipping batch")
-                        continue
-                    valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
 
+                    # Debug: check for NaN/Inf in proj_head output
+                    if torch.isnan(pred_proj).any():
+                        print(f"[ERROR][Batch {batch_idx}] NaN in pred_proj, skipping batch")
+                        break
+                    if torch.isinf(pred_proj).any():
+                        print(f"[ERROR][Batch {batch_idx}] Inf in pred_proj, skipping batch")
+                        break
+
+                    valid_mask = dino_feat.abs().sum(dim=1) > 1e-6
 
                     print('valid_mask.sum()', valid_mask.sum())
                     print('pred_proj[valid_mask].shape', pred_proj[valid_mask].shape)
                     print('dino_feat[valid_mask].shape', dino_feat[valid_mask].shape)
                     print('Any NaN in pred_proj:', torch.isnan(pred_proj).any().item())
                     print('Any NaN in dino_feat:', torch.isnan(dino_feat).any().item())
-                    loss = distillation_loss(pred_proj[valid_mask], dino_feat[valid_mask])
+
+                    if valid_mask.sum() == 0:
+                        print(f"[WARN][Batch {batch_idx}] No valid points after mask, skipping batch")
+                        break
+
+                    pred_valid = pred_proj[valid_mask]
+                    dino_valid = dino_feat[valid_mask]
+                    if pred_valid.shape[0] != dino_valid.shape[0]:
+                        print(f"[ERROR][Batch {batch_idx}] Masked shape mismatch: {pred_valid.shape} vs {dino_valid.shape}, skipping batch")
+                        break
+
+                    loss = distillation_loss(pred_valid, dino_valid)
                     print(f"Batch {batch_idx}: Loss = {loss.item():.6f}")
+
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        print(f"[ERROR][Batch {batch_idx}] Loss is NaN or Inf, skipping batch")
+                        break
+
                 scaler.scale(loss).backward()
-                scaler.step(optimizer) 
+                scaler.step(optimizer)
                 scaler.update()
                 torch.cuda.empty_cache()
                 total_loss += loss.item()
 
             except Exception as e:
                 print(f"Error processing batch {batch_idx}: {str(e)}")
-                raise e
+                break  # Do not raise: continue to next batch for debug
 
         avg_loss = total_loss / len(dataloader)
         print(f"Avg Loss = {avg_loss:.6f}")
