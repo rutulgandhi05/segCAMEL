@@ -164,8 +164,13 @@ if __name__ == "__main__":
 
     frame_counter = 0
     for folder in folders:
-        root_dir = data_root / folder / "raw_data"
-        save_dir = data_root / folder / "processed_data"
+        root_dir = data_root / folder
+        save_dir = data_root / "processed_data"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"Processing folder: {folder}")
+        print(f"Root directory: {root_dir}")
+        print(f"Save directory: {save_dir}")
 
         last_frame = preprocess_and_save_hercules(
             root_dir=root_dir,
