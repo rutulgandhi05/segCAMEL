@@ -212,11 +212,11 @@ if __name__ == "__main__":
     if dataset_env is None:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
 
-    data_dir = Path(dataset_env) / "Mountain_01_Day" / "processed_data"
+    data_dir = Path(dataset_env) / "processed_data"
     train(
         data_dir=data_dir,
         epochs=20,
         batch_size=4,
         lr=1e-3,
-        save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules_MAD1_vrid.pth",
+        save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules__md1_ld1.pth",
     )
