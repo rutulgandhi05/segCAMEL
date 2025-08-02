@@ -169,7 +169,7 @@ def train(
                         print(f"[ERROR][Batch {batch_idx}] NaN or Inf in proj_head output, skipping batch")
                         continue
                    
-                    valid_mask = mask
+                    valid_mask = mask.bool()
                     
 
                     pred_valid = pred_proj[valid_mask]
