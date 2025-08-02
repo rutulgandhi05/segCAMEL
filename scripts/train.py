@@ -108,7 +108,8 @@ def train(
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
 
     model = PointTransformerV3(in_channels=input_dim).to(device)
-    proj_head = torch.nn.Linear(getattr(model, 'out_channels', 64), dino_dim).to(device)
+    #proj_head = torch.nn.Linear(getattr(model, 'out_channels', 64), dino_dim).to(device)
+    proj_head = torch.nn.Linear(64, dino_dim).to(device)
     optimizer = torch.optim.Adam(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
     scaler = GradScaler(device=device)
 
