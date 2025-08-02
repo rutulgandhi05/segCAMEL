@@ -136,9 +136,10 @@ def preprocess_and_save_hercules(
             save_queue.put((save_path, save_data))
 
             frame_counter += 1
+            local_counter += 1
 
             # optional progress log
-            if frame_counter % 10 == 0 or frame_counter == dataset_len:
+            if local_counter % 10 == 0 or local_counter == dataset_len:
                 print(f"[Queued] {save_path}")
 
     # wait for all writes to finish
@@ -147,7 +148,7 @@ def preprocess_and_save_hercules(
     writer_thread.join()
 
     total_time = time.time() - start_time
-    print(f"Preprocessing completed in {total_time:.1f}s ({frame_counter} frames)")
+    print(f"Preprocessing completed in {total_time:.1f}s ({local_counter} frames)")
 
     return frame_counter
 
@@ -161,18 +162,17 @@ if __name__ == "__main__":
     
     data_root = Path(str(data_root))
     folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
-
+    save_dir = data_root / "processed_data"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
     frame_counter = 0
     for folder in folders:
         root_dir = data_root / folder
-        save_dir = data_root / "processed_data"
-        save_dir.mkdir(parents=True, exist_ok=True)
-
         print(f"Processing folder: {folder}")
         print(f"Root directory: {root_dir}")
         print(f"Save directory: {save_dir}")
 
-        last_frame = preprocess_and_save_hercules(
+        frame_counter  = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
             workers=8,
@@ -181,7 +181,6 @@ if __name__ == "__main__":
             frame_counter=frame_counter
         )
 
-        frame_counter = last_frame
-        print(f"Processed {last_frame} frames in {folder}")
+        print(f"Processed {frame_counter } frames in {folder}")
 
     print(f"Total frames processed: {frame_counter}")
