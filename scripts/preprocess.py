@@ -73,7 +73,7 @@ def preprocess_and_save_hercules(
     writer_thread.start()
 
     start_time = time.time()
-    frame_counter = frame_counter
+    local_counter = 0
 
     # --- main loop ---
     for batch in tqdm(dataloader, desc="Processing frames", unit="batch"):
