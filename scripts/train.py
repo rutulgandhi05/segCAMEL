@@ -209,15 +209,15 @@ def train(
     print("Training complete.")
 
 if __name__ == "__main__":
-    dataset_env = os.getenv("HERCULES_DATASET")
-    if dataset_env is None:
-        raise EnvironmentError("HERCULES_DATASET environment variable not set.")
+   
+    train_data_dir = Path(os.getenv("TRAIN_DATA_DIR"))
 
-    data_dir = Path(dataset_env) / "processed_data"
+    dataset_env = Path(os.getenv("HERCULES_DATASET"))
+
     train(
-        data_dir=data_dir,
+        data_dir=train_data_dir,
         epochs=20,
         batch_size=8,
         lr=1e-3,
-        save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules__md1_ld1.pth",
+        save_path=dataset_env / "checkpoints" / "best_model_hercules_md1_ld1.pth",
     )

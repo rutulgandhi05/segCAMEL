@@ -156,13 +156,16 @@ if __name__ == "__main__":
     import os
     
     data_root = os.getenv("HERCULES_DATASET")
-    
+    save_root = os.getenv("TMPDIR")
     if not data_root:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
+    if not save_root:
+        raise EnvironmentError("TMPDIR environment variable not set.")
     
     data_root = Path(str(data_root))
+    save_root = Path(str(save_root))
     folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
-    save_dir = data_root / "processed_data"
+    save_dir = save_root / "processed_data"
     save_dir.mkdir(parents=True, exist_ok=True)
     
     frame_counter = 0

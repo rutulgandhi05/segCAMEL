@@ -12,9 +12,12 @@
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
-export HERCULES_DATASET=$(ws_find hercules_dataset)
 source venv/bin/activate
 module load devel/cuda/12.8
+
+export HERCULES_DATASET=$(ws_find hercules_dataset)
+
 python -m scripts.preprocess
 
-
+rsync -av $TMPDIR/processed_data $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}/
+tar -cvzf $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}.tgz  $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}/

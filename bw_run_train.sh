@@ -12,9 +12,14 @@
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
-export HERCULES_DATASET=$(ws_find hercules_dataset)
 source venv/bin/activate
 module load devel/cuda/12.8
+
+export HERCULES_DATASET=$(ws_find hercules_dataset)
+
+tar -C  $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}/ -xvzf $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}.tgz
+export TRAIN_DATA_DIR=$HERCULES_DATASET/processed_data-${SLURM_JOB_ID}
+
 CUDA_LAUNCH_BLOCKING=1 python -m scripts.train
 
 
