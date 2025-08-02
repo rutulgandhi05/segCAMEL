@@ -160,7 +160,7 @@ if __name__ == "__main__":
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     
     data_root = Path(str(data_root))
-    folders = ["Mountain_01_Day", "Library_01_Day"]
+    folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
 
     frame_counter = 0
     for folder in folders:
