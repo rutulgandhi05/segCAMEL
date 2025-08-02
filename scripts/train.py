@@ -216,7 +216,7 @@ if __name__ == "__main__":
     train(
         data_dir=data_dir,
         epochs=20,
-        batch_size=4,
+        batch_size=16,
         lr=1e-3,
         save_path=Path(dataset_env) / "checkpoints" / "best_model_hercules__md1_ld1.pth",
     )
