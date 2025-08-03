@@ -15,11 +15,8 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
+
 export HERCULES_DATASET=$(ws_find hercules_dataset)
-
-tar -C  $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}/ -xvzf $HERCULES_DATASET/processed_data-${SLURM_JOB_ID}.tgz
-export TRAIN_DATA_DIR=$HERCULES_DATASET/processed_data-${SLURM_JOB_ID}
-
+rsync -av $HERCULES_DATASET/processed_data/ $TMPDIR/processed_data/
 CUDA_LAUNCH_BLOCKING=1 python -m scripts.train
-
-
+rsync -av $TMPDIR/checkpoints $HERCULES_DATASET/checkpoints/

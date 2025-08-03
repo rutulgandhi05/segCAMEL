@@ -210,14 +210,12 @@ def train(
 
 if __name__ == "__main__":
    
-    train_data_dir = Path(os.getenv("TRAIN_DATA_DIR"))
-
-    dataset_env = Path(os.getenv("HERCULES_DATASET"))
+    TMPDIR = Path(os.getenv("TMPDIR")) 
 
     train(
-        data_dir=train_data_dir,
+        data_dir=TMPDIR / "processed_data",
         epochs=20,
         batch_size=8,
         lr=1e-3,
-        save_path=dataset_env / "checkpoints" / "best_model_hercules_md1_ld1.pth",
+        save_path=TMPDIR / "checkpoints" / "best_model_hercules_md1_ld1.pth",
     )
