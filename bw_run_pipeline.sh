@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH -J Preprocess
-#SBATCH -o preprocess_output.txt
-#SBATCH -e preprocess_error.txt
+#SBATCH -J Pipeline
+#SBATCH -o pipeline_output.txt
+#SBATCH -e pipeline_error.txt
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1

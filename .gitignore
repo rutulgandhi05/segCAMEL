@@ -199,6 +199,8 @@ preprocess_error.txt
 preprocess_output.txt
 inference_error.txt
 inference_output.txt
+pipeline_error.txt
+pipeline_output.txt
 client_secret.json
 hercules/dataset_download/client_secret.json
 hercules_error.txt
