@@ -81,8 +81,10 @@ def train(
     data_dir=Path,
     epochs=20,
     batch_size=8,
+    workers: int = 8,
     lr=1e-3,
     save_path=Path,
+    prefetch_factor: int = 2,
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
 
@@ -93,9 +95,10 @@ def train(
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
                             shuffle=True,
-                            num_workers=8,
+                            num_workers=workers,
                             pin_memory=True,
                             persistent_workers=True,
+                            prefetch_factor=prefetch_factor,
                             collate_fn=collate_for_ptv3
                             )
 
@@ -210,12 +213,13 @@ def train(
 
 if __name__ == "__main__":
    
-    TMPDIR = Path(os.getenv("TMPDIR")) 
+    DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
+    SEGMODEL_CHECKPOINT = Path(os.getenv("SEGMODEL_CHECKPOINT"))
 
     train(
-        data_dir=TMPDIR / "processed_data",
-        epochs=20,
-        batch_size=8,
+        data_dir=DATA_DIR,
+        epochs=10,
+        batch_size=16,
         lr=1e-3,
-        save_path=TMPDIR / "checkpoints" / "best_model_hercules_md1_ld1.pth",
+        save_path=SEGMODEL_CHECKPOINT,
     )
