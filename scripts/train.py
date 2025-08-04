@@ -197,6 +197,18 @@ def train(
                 print(f"Error processing batch {batch_idx}: {str(e)}")
                 continue
 
+            finally:
+                # Explicitly delete large variables for memory safety
+                for var in [
+                    "coord", "feat", "dino_feat", "mask", "grid_size", "batch_tensor",
+                    "offset", "input_feat", "grid_coord", "output", "pred_proj",
+                    "valid_mask", "pred_valid", "dino_valid", "loss"
+                ]:
+                    if var in locals():
+                        del locals()[var]
+                del batch
+                torch.cuda.empty_cache()
+
         avg_loss = total_loss / len(dataloader)
         print(f"Avg Loss = {avg_loss:.6f}")
 
