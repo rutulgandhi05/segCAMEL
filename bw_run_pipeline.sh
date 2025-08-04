@@ -3,10 +3,10 @@
 #SBATCH -J Pipeline
 #SBATCH -o pipeline_output.txt
 #SBATCH -e pipeline_error.txt
-#SBATCH -c 8
+#SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 02:30:00
+#SBATCH -t 04:00:00
 #SBATCH -p gpu_h100_il
 #SBATCH --gres=gpu:2
 #SBATCH --mail-type ALL

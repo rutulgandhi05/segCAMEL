@@ -178,7 +178,7 @@ if __name__ == "__main__":
         frame_counter  = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
-            workers=8,
+            workers=16,
             batch_size=16,     
             prefetch_factor=4,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=frame_counter

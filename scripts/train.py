@@ -219,7 +219,9 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         epochs=10,
+        workers=16,
         batch_size=16,
+        prefetch_factor=4,
         lr=1e-3,
         save_path=SEGMODEL_CHECKPOINT,
     )
