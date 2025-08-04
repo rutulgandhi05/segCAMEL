@@ -254,6 +254,6 @@ if __name__ == "__main__":
         workers=16,
         batch_size=12,
         prefetch_factor=4,
-        lr=1e-3,
+        lr=2e-3,
         save_path=TRAIN_CHECKPOINT,
     )
