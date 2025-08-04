@@ -232,7 +232,7 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         epochs=10,
         workers=16,
-        batch_size=16,
+        batch_size=12,
         prefetch_factor=4,
         lr=1e-3,
         save_path=TRAIN_CHECKPOINT,
