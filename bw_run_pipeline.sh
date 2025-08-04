@@ -4,7 +4,7 @@
 #SBATCH -o pipeline_output.txt
 #SBATCH -e pipeline_error.txt
 #SBATCH -c 16
-#SBATCH -N 2
+#SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 06:00:00
 #SBATCH -p gpu_a100_il
