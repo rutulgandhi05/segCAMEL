@@ -6,7 +6,7 @@
 #SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 04:00:00
+#SBATCH -t 06:00:00
 #SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:2
 #SBATCH --ntasks-per-node 32
