@@ -9,7 +9,7 @@
 #SBATCH -t 06:00:00
 #SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:2
-#SBATCH --ntasks-per-node 32
+#SBATCH --ntasks-per-node 16
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
