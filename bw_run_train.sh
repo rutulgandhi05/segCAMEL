@@ -18,5 +18,5 @@ module load devel/cuda/12.8
 
 export HERCULES_DATASET=$(ws_find hercules_dataset)
 rsync -av $HERCULES_DATASET/processed_data/ $TMPDIR/processed_data/
-CUDA_LAUNCH_BLOCKING=1 python -m scripts.train
+CUDA_LAUNCH_BLOCKING=1 python -m scripts.train_segmentation
 rsync -av $TMPDIR/checkpoints $HERCULES_DATASET/checkpoints/

@@ -21,6 +21,6 @@ export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINT=$TMPDIR/segcamel/checkpoints/ckpt_her_m1dl1dsc1d.pth
 
 python -m scripts.preprocess
-python -m scripts.train
+python -m scripts.train_segmentation
 
 cp --verbose $TRAIN_CHECKPOINT $HERCULES_DATASET/checkpoints/
