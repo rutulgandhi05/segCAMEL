@@ -214,7 +214,7 @@ def train(
 if __name__ == "__main__":
    
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
-    SEGMODEL_CHECKPOINT = Path(os.getenv("SEGMODEL_CHECKPOINT"))
+    TRAIN_CHECKPOINT = Path(os.getenv("TRAIN_CHECKPOINT"))
 
     train(
         data_dir=DATA_DIR,
@@ -223,5 +223,5 @@ if __name__ == "__main__":
         batch_size=16,
         prefetch_factor=4,
         lr=1e-3,
-        save_path=SEGMODEL_CHECKPOINT,
+        save_path=TRAIN_CHECKPOINT,
     )
