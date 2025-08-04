@@ -53,8 +53,9 @@ class HerculesDataset(Dataset):
         sample = self.samples[idx]
 
         with Image.open(sample["right_image"]).convert("RGB") as img:
-            img = img.resize((672, 378), Image.LANCZOS)  # Resize to match DINO input size
-            image_tensor = transforms.ToTensor()(img)
+            img = img.resize((672, 378), Image.LANCZOS)
+            transforms = self.transform_factory.get_transform((img.width, img.height)) if hasattr(self.transform_factory, 'get_transform') else self.transform_factory
+            image_tensor = transforms.transform(img)
 
         pointcloud = sample["pointcloud"]
         input_size = transforms.resize_size
