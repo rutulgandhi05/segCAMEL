@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
+import math
 
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
@@ -80,12 +81,14 @@ def safe_grid_coord(coord, grid_size, logger=None):
 def train(
     data_dir=Path,
     epochs=20,
-    batch_size=8,
+    batch_size=12,
     workers: int = 8,
-    lr=1e-3,
+    lr=2e-3,
     save_path=Path,
     prefetch_factor: int = 2,
     device="cuda" if torch.cuda.is_available() else "cpu",
+    pct_start=0.04,
+    total_steps=None,
 ):
 
     print(f"Starting training on device: {device}")
@@ -103,6 +106,13 @@ def train(
                             )
 
     print(f"Loaded {len(dataset)} preprocessed samples")
+    steps_per_epoch = len(dataloader)
+    est_total_steps = epochs * steps_per_epoch
+    print(f"Batch size: {batch_size} | Epochs: {epochs} | Steps per epoch: {steps_per_epoch}")
+    print(f"Estimated total steps: {est_total_steps}")
+    if total_steps:
+        epochs = math.ceil(total_steps / steps_per_epoch)
+        print(f"Will train for {epochs} epochs to hit {total_steps} steps.")
 
     # --- Infer input_dim robustly based on input_mode and first sample
     sample = dataset[0]
@@ -113,9 +123,19 @@ def train(
     model = PointTransformerV3(in_channels=input_dim).to(device)
     #proj_head = torch.nn.Linear(getattr(model, 'out_channels', 64), dino_dim).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
-    optimizer = torch.optim.Adam(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
-    scaler = GradScaler(device=device)
+    optimizer = torch.optim.AdamW(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
 
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=lr,
+        steps_per_epoch=steps_per_epoch,
+        epochs=epochs,
+        pct_start=pct_start,
+        anneal_strategy="cos",
+        div_factor=10,       # initial LR = max_lr / div_factor
+        final_div_factor=100 # final LR = initial / final_div_factor
+    )
+    scaler = GradScaler(device=device)
     best_loss = float("inf")
 
     for epoch in range(epochs):
@@ -190,7 +210,7 @@ def train(
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
-                torch.cuda.empty_cache()
+                scheduler.step()
                 total_loss += loss.item()
 
             except Exception as e:
