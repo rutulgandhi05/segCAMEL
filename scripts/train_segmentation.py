@@ -1,15 +1,13 @@
 import os
-
-from tqdm import tqdm
+import math
 from pathlib import Path
-from utils.misc import setup_logger
-from models.PTv3.model import PointTransformerV3
+from tqdm import tqdm
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
-import math
+from models.PTv3.model import PointTransformerV3
 
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
@@ -51,6 +49,7 @@ def collate_for_ptv3(batch):
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
+        
     for k in ["coord", "feat", "dino_feat", "mask", "batch"]:
         collated[k] = torch.cat(collated[k], dim=0)
     collated["grid_size"] = torch.tensor(collated["grid_size"])
@@ -79,13 +78,13 @@ def safe_grid_coord(coord, grid_size, logger=None):
     return grid_coord
 
 def train(
-    data_dir=Path,
-    epochs=20,
+    data_dir,
+    output_dir,
+    epochs=5,
     batch_size=12,
-    workers: int = 8,
+    workers=8,
     lr=2e-3,
-    output_dir=Path,
-    prefetch_factor: int = 2,
+    prefetch_factor=2,
     device="cuda" if torch.cuda.is_available() else "cpu",
     pct_start=0.04,
     total_steps=None,
@@ -150,17 +149,13 @@ def train(
         checkpoint = torch.load(latest_ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model"])
         proj_head.load_state_dict(checkpoint["proj_head"])
-        if "optimizer" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer"])
-        if "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
-        if "scheduler" in checkpoint:
-            scheduler.load_state_dict(checkpoint["scheduler"])
-        if "epoch" in checkpoint:
-            start_epoch = checkpoint["epoch"] + 1
-        if "best_loss" in checkpoint:
-            best_loss = checkpoint["best_loss"]
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scaler.load_state_dict(checkpoint["scaler"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        start_epoch = checkpoint["epoch"] + 1
+        best_loss = checkpoint["best_loss"]
         print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
+
 
     for epoch in range(epochs):
         model.train()
@@ -172,12 +167,16 @@ def train(
             try:
                 coord = batch["coord"].to(device)
                 feat = batch["feat"].to(device)
+
+                coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
+                feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
+                input_feat = torch.cat([coord, feat], dim=1)
+
                 dino_feat = batch["dino_feat"].to(device)
                 mask = batch["mask"].to(device)
                 grid_size = batch["grid_size"].mean().item()
                 batch_tensor = batch["batch"].to(device)
                 offset = batch["offset"].to(device)
-                input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size)
 
                 if batch_idx == 0:
@@ -226,6 +225,7 @@ def train(
                 
 
                 scaler.scale(loss).backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
                 scheduler.step()
@@ -287,10 +287,10 @@ if __name__ == "__main__":
 
     train(
         data_dir=DATA_DIR,
-        epochs=5,
+        output_dir=TRAIN_CHECKPOINTS,
+        epochs=2,
         workers=16,
         batch_size=12,
         prefetch_factor=2,
-        lr=2e-3,
-        output_dir=TRAIN_CHECKPOINTS,
+        lr=2e-3
     )
