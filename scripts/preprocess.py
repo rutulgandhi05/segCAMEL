@@ -167,8 +167,8 @@ if __name__ == "__main__":
     save_dir = Path(str(save_dir))
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    #folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
-    folders = [ "Library_01_Day"]
+    folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
+    #folders = [ "Library_01_Day"]
 
     frame_counter = 0
     for folder in folders:

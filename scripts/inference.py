@@ -1,76 +1,47 @@
 import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
+from tqdm import tqdm
+import os
+
 from models.PTv3.model import PointTransformerV3
 
-def save_predicted_features_to_pth(
-    model_ckpt_path="data/checkpoints/best_model_hercules_exp_size100.pth",
-    data_pth="data/hercules/Mountain_01_Day/processed_data/frame_00000.pth",
-    input_mode="dino_only",
-    output_key="distilled_feat",
-    output_dir="data/checkpoints/hercules_exp_size100_inference",
-    device="cuda" if torch.cuda.is_available() else "cpu"
-):
-    # --- Load checkpoint ---
-    ckpt = torch.load(model_ckpt_path, map_location=device)
-    data = torch.load(data_pth)
-    coord = data["coord"]
-    feat = data["feat"]
-    dino_feat = data["dino_feat"]
 
-    if coord.dim() == 3 and coord.shape[0] == 1:
-        coord = coord.squeeze(0)
-        feat = feat.squeeze(0)
-        dino_feat = dino_feat.squeeze(0)
+class InferenceDataset(Dataset):
+    def __init__(self, input_dir):
+        self.files = sorted(list(Path(input_dir).glob("*.pth")))
+        assert len(self.files), f"No .pth files found in {input_dir}"
 
-    input_dim = dino_feat.shape[1] if input_mode == "dino_only" else feat.shape[1] + dino_feat.shape[1]
-    dino_dim = dino_feat.shape[1]
+    def __len__(self):
+        return len(self.files)
 
-    model = PointTransformerV3(in_channels=input_dim).to(device)
-    proj_head = torch.nn.Linear(64, dino_dim).to(device)  # 64=backbone's output channel
+    def __getitem__(self, idx):
+        file_path = self.files[idx]
+        sample = torch.load(file_path)
+        return {
+            "file_path": file_path,
+            "coord": sample["coord"],
+            "feat": sample["feat"],
+            "grid_size": sample.get("grid_size", 0.05),
+        }
 
-    model.load_state_dict(ckpt["model"])
-    proj_head.load_state_dict(ckpt["proj_head"])
-    model.eval()
-    proj_head.eval()
-    
-    # --- Prepare input ---
-    coord = coord.to(device)
-    feat = feat.to(device)
-    dino_feat = dino_feat.to(device)
 
-    if input_mode == "dino_only":
-        input_feat = dino_feat.to(device)
-    elif input_mode == "vri_dino":
-        input_feat = torch.cat([feat, dino_feat], dim=1)
-    elif input_mode == "coord_dino":
-        input_feat = torch.cat([coord, dino_feat], dim=1)
-    elif input_mode == "coord_vri_dino":
-        input_feat = torch.cat([coord, feat, dino_feat], dim=1)
-    else:
-        raise ValueError(f"Unknown input_mode: {input_mode}")
-    
-    # --- Grid quantization: match training logic exactly ---
-    default_grid_size = 0.05
-    grid_size = float(data.get("grid_size", default_grid_size))
-    if not (0.01 <= grid_size <= 1.0):
-        grid_size = default_grid_size
+@torch.no_grad()
+def infer_one_file(model, proj_head, sample, device="cuda"):
+    coord = sample["coord"].to(device, non_blocking=True)
+    feat = sample["feat"].to(device, non_blocking=True)
 
+    # Normalize inputs
+    coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
+    feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
+    input_feat = torch.cat([coord, feat], dim=1)
+
+    grid_size = float(sample["grid_size"])
     coord_min = coord.min(0)[0]
     grid_coord = ((coord - coord_min) / grid_size).floor().int()
-
-    if grid_coord.max() > 2**15:
-        print(f"Grid coordinate overflow (max={grid_coord.max()}), using coarser grid_size")
-        grid_size = (coord.max(0)[0] - coord.min(0)[0]).max().item() / 10000
-        grid_coord = ((coord - coord_min) / grid_size).floor().int()
-
-    for axis in range(3):
-        n_unique = len(torch.unique(grid_coord[:, axis]))
-        if n_unique < 2:
-            grid_coord[:, axis] += torch.arange(grid_coord.shape[0]) % 2
-    
-    num_points = coord.shape[0]
-    batch = torch.zeros(num_points, dtype=torch.long, device=device)
-    offset = torch.tensor([num_points], dtype=torch.long, device=device)
+    batch_tensor = torch.zeros(coord.shape[0], dtype=torch.long, device=device)
+    offset = torch.tensor([coord.shape[0]], dtype=torch.long, device=device)
 
     data_dict = {
         "coord": coord,
@@ -78,31 +49,81 @@ def save_predicted_features_to_pth(
         "grid_coord": grid_coord,
         "grid_size": grid_size,
         "offset": offset,
-        "batch": batch,
+        "batch": batch_tensor
     }
 
-    # --- Inference ---
-    with torch.no_grad():
+    with torch.autocast(device_type=device):
         output = model(data_dict)
-        pred = output.feat
-        pred_proj = proj_head(pred)  # shape: (N, dino_dim)
-        # Save as torch.Tensor (not numpy)
-        distilled_feat = pred_proj.cpu()
+        projected_feat = proj_head(output.feat)
+        projected_feat = F.normalize(projected_feat, dim=1)
 
-    # --- Save as new .pth ---
-    if output_dir is None:
-        output_dir = str(Path(data_pth).parent)
+    return coord, projected_feat
 
+
+def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=4, device="cuda"):
+    input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    base_name = Path(data_pth).stem
-    pth_path = output_dir / f"{base_name}_distilled.pth"
+    # Load input sample to infer model dimensions
+    sample = torch.load(next(input_dir.glob("*.pth")))
+    input_dim = sample["coord"].shape[1] + sample["feat"].shape[1]
+    dino_dim = sample["dino_feat"].shape[1]
 
-    data[output_key] = distilled_feat
+    # Load checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model = PointTransformerV3(in_channels=input_dim).to(device)
+    proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
-    torch.save(data, pth_path)
-    print(f"Saved .pth with distilled features to {pth_path}")
+    # Apply compile for faster inference (PyTorch 2.x only)
+    model = torch.compile(model).eval()
+    proj_head = torch.compile(proj_head).eval()
+
+    model.load_state_dict(checkpoint["model"])
+    proj_head.load_state_dict(checkpoint["proj_head"])
+
+    dataset = InferenceDataset(input_dir)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    for batch in tqdm(dataloader, desc="Running inference"):
+        coord, projected_feat = infer_one_file(
+            model,
+            proj_head,
+            {
+                "coord": batch["coord"][0],
+                "feat": batch["feat"][0],
+                "grid_size": batch["grid_size"][0].item(),
+            },
+            device=device
+        )
+
+        file_path = Path(batch["file_path"][0])
+        save_path = output_dir / file_path.name
+        torch.save({
+            "coord": coord.cpu(),
+            "projected_feat": projected_feat.cpu()
+        }, save_path)
+
+    print(f"Inference complete. Results saved to: {output_dir}")
+
 
 if __name__ == "__main__":
-    save_predicted_features_to_pth()
+    INFERENCE_INPUT = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
+    CHECKPOINT_PATH = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
+    INFERENCE_OUTPUT = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
+    
+    run_inference(
+        input_dir=INFERENCE_INPUT,
+        checkpoint_path=CHECKPOINT_PATH,
+        output_dir=INFERENCE_OUTPUT,
+        batch_size=12,
+        workers=16,
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
