@@ -143,7 +143,7 @@ def train(
     latest_ckpt_path = output_dir / "latest_checkpoint.pth"
     best_ckpt_path = output_dir / "best_model.pth"
 
-    
+
     # ---- RESUME LOGIC ----
     if latest_ckpt_path.exists():
         print(f"Resuming from checkpoint: {latest_ckpt_path}")
@@ -287,7 +287,7 @@ if __name__ == "__main__":
 
     train(
         data_dir=DATA_DIR,
-        epochs=10,
+        epochs=5,
         workers=16,
         batch_size=12,
         prefetch_factor=4,
