@@ -69,7 +69,7 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     dino_dim = sample["dino_feat"].shape[1]
 
     # Optional: Hardcode input_dim if checkpoint used 5
-    # input_dim = 5
+    input_dim = 5
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model = PointTransformerV3(in_channels=input_dim).to(device)
