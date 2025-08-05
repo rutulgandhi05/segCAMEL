@@ -73,13 +73,13 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     dino_dim = sample["dino_feat"].shape[1]
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = PointTransformerV3(in_channels=input_dim).to(device)
+    model = PointTransformerV3(in_channels=5).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     try:
         model.load_state_dict(checkpoint["model"])
     except RuntimeError as e:
-        print("⚠️ State dict loading failed. Trying strict=False...")
+        print("State dict loading failed. Trying strict=False...")
         model.load_state_dict(checkpoint["model"], strict=False)
 
     proj_head.load_state_dict(checkpoint["proj_head"])
