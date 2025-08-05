@@ -138,6 +138,7 @@ def preprocess_and_save_hercules(
             frame_counter += 1
             local_counter += 1
 
+            torch.cuda.empty_cache()
             # optional progress log
             if local_counter % 10 == 0 or local_counter == dataset_len:
                 print(f"[Queued] {save_path}")
