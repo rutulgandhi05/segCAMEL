@@ -290,7 +290,7 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
-        epochs=20,
+        epochs=2,
         workers=16,
         batch_size=12,
         prefetch_factor=4,
