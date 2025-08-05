@@ -292,5 +292,5 @@ if __name__ == "__main__":
         batch_size=12,
         prefetch_factor=4,
         lr=2e-3,
-        save_path=TRAIN_CHECKPOINTS,
+        output_dir=TRAIN_CHECKPOINTS,
     )
