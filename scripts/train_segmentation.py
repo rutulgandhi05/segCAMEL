@@ -285,6 +285,8 @@ if __name__ == "__main__":
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
 
+    TRAIN_CHECKPOINTS.mkdir(parents=True, exist_ok=True)
+
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
