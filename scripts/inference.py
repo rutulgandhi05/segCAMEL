@@ -7,8 +7,6 @@ import os
 
 from models.PTv3.model import PointTransformerV3
 
-def collate_fn(batch):
-    return batch[0]
 
 class InferenceDataset(Dataset):
     def __init__(self, input_dir):
@@ -22,7 +20,7 @@ class InferenceDataset(Dataset):
         file_path = self.files[idx]
         sample = torch.load(file_path)
         return {
-            "file_path": file_path,
+            "file_path": file_path,  # Path object, will be handled via collate_fn
             "coord": sample["coord"],
             "feat": sample["feat"],
             "grid_size": sample.get("grid_size", 0.05),
@@ -34,7 +32,6 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
     coord = sample["coord"].to(device, non_blocking=True)
     feat = sample["feat"].to(device, non_blocking=True)
 
-    # Normalize inputs
     coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
     feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
     input_feat = torch.cat([coord, feat], dim=1)
@@ -51,8 +48,7 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
         "grid_coord": grid_coord,
         "grid_size": grid_size,
         "offset": offset,
-        "batch": batch_tensor,
-        "collate_fn": collate_fn,
+        "batch": batch_tensor
     }
 
     with torch.autocast(device_type=device.type):
@@ -68,18 +64,18 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load input sample to infer model dimensions
     sample = torch.load(next(input_dir.glob("*.pth")))
     input_dim = sample["coord"].shape[1] + sample["feat"].shape[1]
     dino_dim = sample["dino_feat"].shape[1]
 
-    # Load checkpoint
+    # Optional: Hardcode input_dim if checkpoint used 5
+    # input_dim = 5
+
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = PointTransformerV3(in_channels=5).to(device)
+    model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
-    # Apply compile for faster inference (PyTorch 2.x only)
-    
+    # ✅ Load state_dict before compiling
     model.load_state_dict(checkpoint["model"])
     proj_head.load_state_dict(checkpoint["proj_head"])
 
@@ -89,11 +85,12 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     dataset = InferenceDataset(input_dir)
     dataloader = DataLoader(
         dataset,
-        batch_size=batch_size,
+        batch_size=1,
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        collate_fn=lambda x: x[0],  # ✅ Fixes Path object collation error
     )
 
     for batch in tqdm(dataloader, desc="Running inference"):
@@ -101,14 +98,14 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
             model,
             proj_head,
             {
-                "coord": batch["coord"][0],
-                "feat": batch["feat"][0],
-                "grid_size": batch["grid_size"][0].item(),
+                "coord": batch["coord"],
+                "feat": batch["feat"],
+                "grid_size": batch["grid_size"],
             },
             device=device
         )
 
-        file_path = Path(batch["file_path"][0])
+        file_path = batch["file_path"]
         save_path = output_dir / file_path.name
         torch.save({
             "coord": coord.cpu(),
