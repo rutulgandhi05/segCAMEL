@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH -J Pipeline
-#SBATCH -o pipeline_output.txt
-#SBATCH -e pipeline_error.txt
+#SBATCH -J Inference
+#SBATCH -o inference_output.txt
+#SBATCH -e inference_error.txt
 #SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1

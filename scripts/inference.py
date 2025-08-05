@@ -72,7 +72,7 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
 
     # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = PointTransformerV3(in_channels=input_dim).to(device)
+    model = PointTransformerV3(in_channels=5).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     # Apply compile for faster inference (PyTorch 2.x only)
