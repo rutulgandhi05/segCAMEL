@@ -4,8 +4,11 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from tqdm import tqdm
 import os
+import warnings
 
 from models.PTv3.model import PointTransformerV3
+
+warnings.filterwarnings("ignore", category=UserWarning)  # e.g., TIMM layer deprecation warnings
 
 
 class InferenceDataset(Dataset):
@@ -20,7 +23,7 @@ class InferenceDataset(Dataset):
         file_path = self.files[idx]
         sample = torch.load(file_path)
         return {
-            "file_path": file_path,  # Path object, will be handled via collate_fn
+            "file_path": str(file_path),  # convert to string to avoid collate issues
             "coord": sample["coord"],
             "feat": sample["feat"],
             "grid_size": sample.get("grid_size", 0.05),
@@ -32,10 +35,12 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
     coord = sample["coord"].to(device, non_blocking=True)
     feat = sample["feat"].to(device, non_blocking=True)
 
+    # Normalize both coord and feat
     coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
     feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
     input_feat = torch.cat([coord, feat], dim=1)
 
+    # Build sparse tensor metadata
     grid_size = float(sample["grid_size"])
     coord_min = coord.min(0)[0]
     grid_coord = ((coord - coord_min) / grid_size).floor().int()
@@ -51,10 +56,9 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
         "batch": batch_tensor
     }
 
-    with torch.autocast(device_type=device):
-        output = model(data_dict)
-        projected_feat = proj_head(output.feat)
-        projected_feat = F.normalize(projected_feat, dim=1)
+    output = model(data_dict)
+    projected_feat = proj_head(output.feat)
+    projected_feat = F.normalize(projected_feat, dim=1)
 
     return coord, projected_feat
 
@@ -68,19 +72,19 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     input_dim = sample["coord"].shape[1] + sample["feat"].shape[1]
     dino_dim = sample["dino_feat"].shape[1]
 
-    # Optional: Hardcode input_dim if checkpoint used 5
-    input_dim = 5
-
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model = PointTransformerV3(in_channels=input_dim).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
-    # ✅ Load state_dict before compiling
-    model.load_state_dict(checkpoint["model"])
-    proj_head.load_state_dict(checkpoint["proj_head"])
+    try:
+        model.load_state_dict(checkpoint["model"])
+    except RuntimeError as e:
+        print("⚠️ State dict loading failed. Trying strict=False...")
+        model.load_state_dict(checkpoint["model"], strict=False)
 
-    model = torch.compile(model).eval()
-    proj_head = torch.compile(proj_head).eval()
+    proj_head.load_state_dict(checkpoint["proj_head"])
+    model.eval()
+    proj_head.eval()
 
     dataset = InferenceDataset(input_dir)
     dataloader = DataLoader(
@@ -90,7 +94,7 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
         num_workers=workers,
         pin_memory=True,
         persistent_workers=True,
-        collate_fn=lambda x: x[0],  # ✅ Fixes Path object collation error
+        collate_fn=lambda x: x[0],  # Fix Path object collation issue
     )
 
     for batch in tqdm(dataloader, desc="Running inference"):
@@ -105,7 +109,7 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
             device=device
         )
 
-        file_path = batch["file_path"]
+        file_path = Path(batch["file_path"])
         save_path = output_dir / file_path.name
         torch.save({
             "coord": coord.cpu(),
@@ -119,12 +123,12 @@ if __name__ == "__main__":
     INFERENCE_INPUT = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     CHECKPOINT_PATH = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
     INFERENCE_OUTPUT = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
-    
+
     run_inference(
         input_dir=INFERENCE_INPUT,
         checkpoint_path=CHECKPOINT_PATH,
         output_dir=INFERENCE_OUTPUT,
-        batch_size=12,
-        workers=16,
+        batch_size=1,         # Must be 1 due to current single-sample logic
+        workers=8,
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
