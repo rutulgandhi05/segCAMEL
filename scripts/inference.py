@@ -51,7 +51,7 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
         "batch": batch_tensor
     }
 
-    with torch.autocast(device_type=device.type):
+    with torch.autocast(device_type=device):
         output = model(data_dict)
         projected_feat = proj_head(output.feat)
         projected_feat = F.normalize(projected_feat, dim=1)
