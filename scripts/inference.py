@@ -74,6 +74,6 @@ def run_inference(input_dir, output_dir, checkpoint_path, device="cuda"):
 if __name__ == "__main__":
     input_dir = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     output_dir = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
-    checkpoint_path = Path(os.getenv("TRAIN_CHECKPOINTS_DIR")) / "best_model.pth"
+    checkpoint_path = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
     output_dir.mkdir(exist_ok=True, parents=True)
     run_inference(input_dir, output_dir, checkpoint_path)
