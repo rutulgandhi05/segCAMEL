@@ -76,11 +76,12 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     # Apply compile for faster inference (PyTorch 2.x only)
-    model = torch.compile(model).eval()
-    proj_head = torch.compile(proj_head).eval()
-
+    
     model.load_state_dict(checkpoint["model"])
     proj_head.load_state_dict(checkpoint["proj_head"])
+
+    model = torch.compile(model).eval()
+    proj_head = torch.compile(proj_head).eval()
 
     dataset = InferenceDataset(input_dir)
     dataloader = DataLoader(
