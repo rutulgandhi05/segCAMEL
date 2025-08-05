@@ -18,9 +18,11 @@ module load devel/cuda/12.8
 
 export HERCULES_DATASET=$(ws_find hercules_dataset)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
-export TRAIN_CHECKPOINT=$TMPDIR/segcamel/checkpoints/ckpt_her_m1dl1dsc1d.pth
+export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
+cp -r --verbose $HERCULES_DATASET/checkpoints/ $TRAIN_CHECKPOINTS/ 
 
 python -m scripts.preprocess
 python -m scripts.train_segmentation
 
-cp --verbose $TRAIN_CHECKPOINT $HERCULES_DATASET/checkpoints/
+mkdir -p $HERCULES_DATASET/checkpoints/
+cp -r --verbose $TRAIN_CHECKPOINTS/ $HERCULES_DATASET/checkpoints/

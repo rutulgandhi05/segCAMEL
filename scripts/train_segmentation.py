@@ -23,7 +23,7 @@ class PointCloudDataset(torch.utils.data.Dataset):
         sample = torch.load(self.files[idx])
         return {
             "coord": sample["coord"],
-            "feat": sample["feat"],
+            "feat": sample["feat"][:, :2],
             "dino_feat": sample["dino_feat"],
             "grid_size": float(sample.get("grid_size", 0.05)),
             "mask": sample["mask"], 
@@ -84,7 +84,7 @@ def train(
     batch_size=12,
     workers: int = 8,
     lr=2e-3,
-    save_path=Path,
+    output_dir=Path,
     prefetch_factor: int = 2,
     device="cuda" if torch.cuda.is_available() else "cpu",
     pct_start=0.04,
@@ -135,8 +135,30 @@ def train(
         div_factor=10,       # initial LR = max_lr / div_factor
         final_div_factor=100 # final LR = initial / final_div_factor
     )
+
     scaler = GradScaler(device=device)
     best_loss = float("inf")
+    start_epoch = 0
+
+    latest_ckpt_path = output_dir / "latest_checkpoint.pth"
+    best_ckpt_path = output_dir / "best_model.pth"
+    # ---- RESUME LOGIC ----
+    if latest_ckpt_path.exists():
+        print(f"Resuming from checkpoint: {latest_ckpt_path}")
+        checkpoint = torch.load(latest_ckpt_path, map_location=device)
+        model.load_state_dict(checkpoint["model"])
+        proj_head.load_state_dict(checkpoint["proj_head"])
+        if "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+        if "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+        if "scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler"])
+        if "epoch" in checkpoint:
+            start_epoch = checkpoint["epoch"] + 1
+        if "best_loss" in checkpoint:
+            best_loss = checkpoint["best_loss"]
+        print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
 
     for epoch in range(epochs):
         model.train()
@@ -153,7 +175,6 @@ def train(
                 grid_size = batch["grid_size"].mean().item()
                 batch_tensor = batch["batch"].to(device)
                 offset = batch["offset"].to(device)
-
                 input_feat = torch.cat([coord, feat], dim=1)
                 grid_coord = safe_grid_coord(coord, grid_size)
 
@@ -161,7 +182,6 @@ def train(
                     print(f"[Batch 0] input_feat: min={input_feat.min().item()}, max={input_feat.max().item()}, mean={input_feat.mean().item()}, std={input_feat.std().item()}")
                     print(f"  Any NaN: {torch.isnan(input_feat).any().item()}, Any Inf: {torch.isinf(input_feat).any().item()}")
 
-                # Basic validity checks
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN or Inf in input_feat, skipping batch")
                     continue
@@ -185,16 +205,12 @@ def train(
                         print(f"[ERROR][Batch {batch_idx}] NaN or Inf in model output, skipping batch")
                         continue
 
-                    # Check model output
-                   
                     pred_proj = proj_head(output.feat)
                     if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
                         print(f"[ERROR][Batch {batch_idx}] NaN or Inf in proj_head output, skipping batch")
                         continue
                    
-                    valid_mask = mask.bool()
-                    
-
+                    valid_mask = mask.bool()                   
                     pred_valid = pred_proj[valid_mask]
                     dino_valid = dino_feat[valid_mask]
                     if pred_valid.shape[0] != dino_valid.shape[0]:
@@ -232,21 +248,40 @@ def train(
         avg_loss = total_loss / len(dataloader)
         print(f"Avg Loss = {avg_loss:.6f}")
 
+
+        # Always save latest checkpoint for resume
+        latest_ckpt_this_epoch = output_dir / f"latest_checkpoint_epoch{epoch+1:04d}.pth"
+        torch.save({
+            "model": model.state_dict(),
+            "proj_head": proj_head.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
+            "epoch": epoch,
+            "best_loss": best_loss
+        }, latest_ckpt_this_epoch)
+        print(f"Latest checkpoint saved: {latest_ckpt_this_epoch}")
+
         if avg_loss < best_loss:
             best_loss = avg_loss
-            save_path.parent.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
             torch.save({
                 "model": model.state_dict(),
-                "proj_head": proj_head.state_dict()
-            }, save_path)
-            print(f"Best model saved to {save_path} (loss = {avg_loss:.6f})")
+                "proj_head": proj_head.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict(),
+                "epoch": epoch,
+                "best_loss": best_loss
+            }, best_ckpt_path)
+            print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
     print("Training complete.")
 
 if __name__ == "__main__":
    
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
-    TRAIN_CHECKPOINT = Path(os.getenv("TRAIN_CHECKPOINT"))
+    TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
 
     train(
         data_dir=DATA_DIR,
@@ -255,5 +290,5 @@ if __name__ == "__main__":
         batch_size=12,
         prefetch_factor=4,
         lr=2e-3,
-        save_path=TRAIN_CHECKPOINT,
+        save_path=TRAIN_CHECKPOINTS,
     )
