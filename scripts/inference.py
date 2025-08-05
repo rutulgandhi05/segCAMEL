@@ -52,7 +52,7 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
         "batch": batch_tensor
     }
 
-    with torch.autocast(device_type=device):
+    with torch.autocast(device_type=device.type):
         output = model(data_dict)
         projected_feat = proj_head(output.feat)
         projected_feat = F.normalize(projected_feat, dim=1)
@@ -85,7 +85,7 @@ def run_inference(input_dir, checkpoint_path, output_dir, batch_size=1, workers=
     dataset = InferenceDataset(input_dir)
     dataloader = DataLoader(
         dataset,
-        batch_size=1,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
