@@ -293,6 +293,6 @@ if __name__ == "__main__":
         epochs=2,
         workers=16,
         batch_size=12,
-        prefetch_factor=4,
+        prefetch_factor=2,
         lr=2e-3
     )
