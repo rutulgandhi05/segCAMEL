@@ -22,6 +22,7 @@ export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/inference_output
 
 mkdir -p $TRAIN_CHECKPOINTS
+mkdir -p $INFERENCE_OUTPUT_DIR
 cp --verbose $HERCULES_DATASET/test_library_01_day/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
 
 python -m scripts.preprocess
