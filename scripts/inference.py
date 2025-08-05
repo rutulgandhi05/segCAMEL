@@ -7,6 +7,8 @@ import os
 
 from models.PTv3.model import PointTransformerV3
 
+def collate_fn(batch):
+    return batch[0]
 
 class InferenceDataset(Dataset):
     def __init__(self, input_dir):
@@ -49,7 +51,8 @@ def infer_one_file(model, proj_head, sample, device="cuda"):
         "grid_coord": grid_coord,
         "grid_size": grid_size,
         "offset": offset,
-        "batch": batch_tensor
+        "batch": batch_tensor,
+        "collate_fn": collate_fn,
     }
 
     with torch.autocast(device_type=device.type):
