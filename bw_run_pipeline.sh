@@ -6,8 +6,8 @@
 #SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 00:30:00
-#SBATCH -p gpu_a100_short
+#SBATCH -t 06:00:00
+#SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:2
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
@@ -22,5 +22,5 @@ export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 python -m scripts.preprocess
 python -m scripts.train_segmentation
 
-mkdir -p $HERCULES_DATASET/test_library_01_day
-cp -r --verbose $TRAIN_CHECKPOINTS/ $HERCULES_DATASET/test_library_01_day/
+mkdir -p $HERCULES_DATASET/06082025_e1_train_herucles_with_vel_md1_ld1_sd1
+cp -r --verbose $TRAIN_CHECKPOINTS/ $HERCULES_DATASET/06082025_e1_train_herucles_with_vel_md1_ld1_sd1/
