@@ -36,14 +36,12 @@ def preprocess_and_save_hercules(
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-
     print(f"root_dir: {root_dir}   save_dir: {save_dir}")
-    # --- extractor and dataset ---
+
     extractor = Extractor()
     dataset = HerculesDataset(root_dir, transform=extractor.transform_factory, max_workers=workers)
     dataset_len = len(dataset)
     print(f"Dataset length: {dataset_len}")
-    # --- DataLoader with persistent workers & prefetching ---
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -87,7 +85,7 @@ def preprocess_and_save_hercules(
         with torch.no_grad():
             features_batch = extractor.extract_dino_features(image_tensors)
 
-        # now move features to device once
+        # move features to device once
         # process each sample in the batch
         for i in range(image_tensors.shape[0]):
             # flat DINO patch features
@@ -112,6 +110,9 @@ def preprocess_and_save_hercules(
                 patch_features=dino_feat
             )
             assigned_feats, mask = projector.assign_features(xyz.float())
+
+            valid_ratio = 100.0 * mask.sum().item() / mask.numel()
+            print(f"[Frame {frame_counter:05d}] Valid DINO projection: {valid_ratio:.2f}%")
 
             # — now move everything to CPU once —
             coord_cpu     = xyz.float().cpu()

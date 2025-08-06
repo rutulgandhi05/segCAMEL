@@ -21,7 +21,7 @@ class PointCloudDataset(torch.utils.data.Dataset):
         sample = torch.load(self.files[idx])
         return {
             "coord": sample["coord"],
-            "feat": sample["feat"][:, :2],
+            "feat": sample["feat"],
             "dino_feat": sample["dino_feat"],
             "grid_size": float(sample.get("grid_size", 0.05)),
             "mask": sample["mask"], 
@@ -163,6 +163,7 @@ def train(
         total_loss = 0
         print(f"\nEpoch {epoch + 1}/{epochs}")
 
+        skipped_batches = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
                 coord = batch["coord"].to(device)
@@ -185,9 +186,11 @@ def train(
 
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN or Inf in input_feat, skipping batch")
+                    skipped_batches += 1
                     continue
                 if input_feat.abs().sum().item() == 0:
                     print(f"[WARN][Batch {batch_idx}] All-zero input_feat, skipping batch")
+                    skipped_batches += 1
                     continue
 
                 data_dict = {
@@ -204,11 +207,13 @@ def train(
                     output = model(data_dict)
                     if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
                         print(f"[ERROR][Batch {batch_idx}] NaN or Inf in model output, skipping batch")
+                        skipped_batches += 1
                         continue
 
                     pred_proj = proj_head(output.feat)
                     if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
                         print(f"[ERROR][Batch {batch_idx}] NaN or Inf in proj_head output, skipping batch")
+                        skipped_batches += 1
                         continue
                    
                     valid_mask = mask.bool()                   
@@ -216,11 +221,13 @@ def train(
                     dino_valid = dino_feat[valid_mask]
                     if pred_valid.shape[0] != dino_valid.shape[0]:
                         print(f"[ERROR][Batch {batch_idx}] Masked shape mismatch: {pred_valid.shape} vs {dino_valid.shape}, skipping batch")
+                        skipped_batches += 1
                         continue
 
                     loss = distillation_loss(pred_valid, dino_valid)
                     if torch.isnan(loss) or torch.isinf(loss):
                         print(f"[ERROR][Batch {batch_idx}] Loss is NaN or Inf, skipping batch")
+                        skipped_batches += 1
                         continue
                 
 
@@ -233,6 +240,7 @@ def train(
 
             except Exception as e:
                 print(f"Error processing batch {batch_idx}: {str(e)}")
+                skipped_batches += 1
                 continue
 
             finally:
@@ -278,6 +286,7 @@ def train(
             }, best_ckpt_path)
             print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
+        print(f"[Epoch {epoch+1}] Skipped {skipped_batches} batches due to errors.")
     print("Training complete.")
 
 if __name__ == "__main__":
@@ -290,7 +299,7 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
-        epochs=10,
+        epochs=20,
         workers=16,
         batch_size=12,
         prefetch_factor=2,

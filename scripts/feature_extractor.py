@@ -23,7 +23,7 @@ class Extractor:
         self.clip_model = clip_model
         self.model = load_model(model_name=self.dino_model)
         self.extractor = DinoFeatureExtractor(self.model, device="cuda" if torch.cuda.is_available() else "cpu")
-        self.transform_factory=TransformFactory(model_name=self.dino_model, patch_size=self.model.patch_size)
+        self.transform_factory=TransformFactory(model_name=self.dino_model, patch_size=self.extractor.patch_size)
         self.pca = PCAModule(n_components=3)
 
     def extract_dino_features(self, images: torch.Tensor):

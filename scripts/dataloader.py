@@ -34,7 +34,7 @@ class ScantinelDataset(Dataset):
         }
 
 class HerculesDataset(Dataset):
-    def __init__(self, root_dir, transform=None, max_workers=8):
+    def __init__(self, root_dir, transform_factory=None, max_workers=8):
         """
         PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
 
@@ -44,7 +44,7 @@ class HerculesDataset(Dataset):
         self.root_dir = Path(root_dir)
         print(f"Loading Hercules dataset from {self.root_dir}")
         self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True, max_workers=max_workers)[:10]
-        self.transform_factory = transform if transform is not None else transforms.ToTensor()
+        self.transform_factory = transform_factory
 
     def __len__(self):
         return len(self.samples)
@@ -54,12 +54,12 @@ class HerculesDataset(Dataset):
 
         with Image.open(sample["right_image"]).convert("RGB") as img:
             img = img.resize((672, 378), Image.LANCZOS)
-            transforms = self.transform_factory.get_transform((img.width, img.height)) if hasattr(self.transform_factory, 'get_transform') else self.transform_factory
-            image_tensor = transforms.transform(img)
+            transform = self.transform_factory.get_transform((img.width, img.height))
+            image_tensor = transform(img)
 
         pointcloud = sample["pointcloud"]
-        input_size = transforms.resize_size
-        feature_map_size = transforms.feature_map_size
+        input_size = transform.resize_size
+        feature_map_size = transform.feature_map_size
 
         intrinsics = sample["stereo_right_intrinsics"]
         intrinsics = scale_intrinsics(
