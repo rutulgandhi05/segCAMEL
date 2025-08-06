@@ -47,7 +47,7 @@ def infer_one_file(model, proj_head, file_path, device):
     proj_feat = proj_head(output.feat)
 
     # Save unnormalized coordinates
-    return raw_coord.cpu().numpy(), proj_feat.cpu().numpy()
+    return raw_coord.cpu().numpy(), proj_feat.cpu().numpy(), input_feat.cpu().numpy(), sample["dino_feat"].cpu().numpy()
 
 
 def run_inference(input_dir, output_dir, checkpoint_path, device="cuda"):
@@ -69,9 +69,9 @@ def run_inference(input_dir, output_dir, checkpoint_path, device="cuda"):
 
     for file_path in tqdm(all_files, desc="Running inference"):
         try:
-            coord, feat = infer_one_file(model, proj_head, file_path, device)
+            coord, proj_feat, input_feat, dino_feat = infer_one_file(model, proj_head, file_path, device)
             out_path = output_dir / f"{file_path.stem}.npz"
-            np.savez_compressed(out_path, coord=coord, feat=feat)
+            np.savez_compressed(out_path, coord=coord, proj_feat=proj_feat, input_feat=input_feat, dino_feat=dino_feat)
         except Exception as e:
             print(f"[ERROR] Failed on {file_path.name}: {e}")
 
