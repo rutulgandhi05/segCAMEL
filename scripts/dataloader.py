@@ -43,7 +43,7 @@ class HerculesDataset(Dataset):
         """
         self.root_dir = Path(root_dir)
         print(f"Loading Hercules dataset from {self.root_dir}")
-        self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True, max_workers=max_workers)[:10]
+        self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=True, max_workers=max_workers)
         self.transform_factory = transform_factory
 
     def __len__(self):
