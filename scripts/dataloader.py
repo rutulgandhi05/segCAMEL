@@ -55,7 +55,7 @@ class HerculesDataset(Dataset):
         with Image.open(sample["right_image"]).convert("RGB") as img:
             img = img.resize((672, 378), Image.LANCZOS)
             transform = self.transform_factory.get_transform((img.width, img.height))
-            image_tensor = transform(img)
+            image_tensor = transform.transform(img)
 
         pointcloud = sample["pointcloud"]
         input_size = transform.resize_size
