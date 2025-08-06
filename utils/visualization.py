@@ -73,3 +73,21 @@ def visualize_pca_colored_pointcloud(xyz: np.ndarray, features: np.ndarray, mask
     pcd.colors = o3d.utility.Vector3dVector(colors)
     
     o3d.visualization.draw_geometries([pcd])
+
+
+
+def visualize_pca_colored_inference(coord: np.ndarray, features: np.ndarray):
+    # PCA to 3D for RGB color
+    pca = PCA(n_components=3)
+    reduced = pca.fit_transform(features)
+
+    # Normalize for visualization
+    colors = (reduced - reduced.min(axis=0)) / (reduced.max(axis=0) - reduced.min(axis=0) + 1e-6)
+
+    # Create Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(coord)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+
+    # Visualize
+    o3d.visualization.draw_geometries([pcd])
