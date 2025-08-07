@@ -320,8 +320,9 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
         epochs=20,
-        workers=28,
-        batch_size=24,
+        workers=32,
+        batch_size=12,
         prefetch_factor=4,
-        lr=2e-3
+        lr=2e-3,
+        use_data_parallel=False
     )
