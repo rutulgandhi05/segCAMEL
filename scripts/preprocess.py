@@ -8,10 +8,8 @@ from queue import Queue
 from scripts.feature_extractor import Extractor
 from scripts.dataloader import HerculesDataset
 from torch.utils.data import DataLoader
-from utils.misc import setup_logger
 from scripts.project_2d_to_3d import LidarToImageProjector
-
-logger = setup_logger("preprocess")
+from utils.misc import _resolve_default_workers
 
 def custom_collate(batch):
     # Custom collate for variable‐size fields (pointcloud etc.)
@@ -28,9 +26,9 @@ def preprocess_and_save_hercules(
     root_dir: Path,
     save_dir: Path,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    workers: int = 8,
-    batch_size: int = 8,
-    prefetch_factor: int = 2,
+    workers: int = None,
+    batch_size: int = 16,
+    prefetch_factor: int = 4,
     frame_counter: int = 0
 ):
     root_dir = Path(root_dir)
@@ -38,10 +36,22 @@ def preprocess_and_save_hercules(
     save_dir.mkdir(parents=True, exist_ok=True)
     print(f"root_dir: {root_dir}   save_dir: {save_dir}")
 
+    # Determine a sensible worker count if not specified
+    if workers is None:
+        workers = _resolve_default_workers()
+    workers = max(1, int(workers))
+    print(f"Using {workers} DataLoader workers")
+
     extractor = Extractor()
-    dataset = HerculesDataset(root_dir, transform_factory=extractor.transform_factory, max_workers=workers)
+    dataset = HerculesDataset(
+        root_dir,
+        transform_factory=extractor.transform_factory,
+        max_workers=workers,
+        use_right_image=True,
+    )  # Use right image by default)
     dataset_len = len(dataset)
     print(f"Dataset length: {dataset_len}")
+
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -85,14 +95,10 @@ def preprocess_and_save_hercules(
         with torch.no_grad():
             features_batch = extractor.extract_dino_features(image_tensors)
 
-        # move features to device once
         # process each sample in the batch
         for i in range(image_tensors.shape[0]):
             # flat DINO patch features
-            features = features_batch[i]
-            dino_feat = features.flat().tensor.to(device)
-
-            # lidar xyz + extra feats
+            dino_feat = features_batch[i].flat().tensor.to(device)
             pc = batch["pointcloud"][i].to(device)
             xyz = pc[:, :3].to(device)
             feats = pc[:, 3:].to(device) if pc.shape[1] > 3 else torch.zeros((xyz.shape[0], 1), dtype=pc.dtype, device=device)
@@ -139,16 +145,16 @@ def preprocess_and_save_hercules(
             frame_counter += 1
             local_counter += 1
 
-            torch.cuda.empty_cache()
             # optional progress log
             if local_counter % 10 == 0 or local_counter == dataset_len:
                 print(f"[Queued] {save_path}")
 
+    # --- end of main loop ---
     # wait for all writes to finish
     save_queue.join()
     save_queue.put(None)
     writer_thread.join()
-
+    torch.cuda.empty_cache()
     total_time = time.time() - start_time
     print(f"Preprocessing completed in {total_time:.1f}s ({local_counter} frames)")
 
@@ -175,15 +181,13 @@ if __name__ == "__main__":
     for folder in folders:
         root_dir = data_root / folder
         print(f"Processing folder: {folder}")
-        print(f"Root directory: {root_dir}")
-        print(f"Save directory: {save_dir}")
 
         frame_counter  = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
-            workers=16,
-            batch_size=16,     
-            prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
+            workers=28,
+            batch_size=24,     
+            prefetch_factor=4,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=frame_counter
         )
 

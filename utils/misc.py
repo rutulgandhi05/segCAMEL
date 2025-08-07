@@ -3,6 +3,8 @@ from bisect import bisect_left
 import logging
 import pandas as pd
 import numpy as np
+import os
+import re
 
 def find_closest(stamps, target):
         """Binary‐search nearest stamp."""
@@ -61,3 +63,34 @@ def scale_intrinsics(K_orig: np.ndarray, orig_size: tuple, new_size: tuple):
     K_new[0, 2] *= scale_x   # cx
     K_new[1, 2] *= scale_y   # cy
     return K_new
+
+def _resolve_default_workers() -> int:
+    """Resolve a sensible default worker count based on the environment.
+
+    This helper inspects Slurm environment variables to infer the number of
+    CPU cores assigned to the current job.  If such variables are not set or
+    cannot be parsed, it falls back to the machine's CPU count.
+
+    Returns:
+        An integer >= 1 representing the maximum number of worker processes
+        suitable for a :class:`~concurrent.futures.ProcessPoolExecutor`.
+    """
+    # Check common Slurm variables.  Some may be formatted like "32(x2)".
+    slurm_vars = [
+        "SLURM_CPUS_ON_NODE",
+        "SLURM_JOB_CPUS_PER_NODE",
+        "SLURM_CPUS_PER_TASK",
+    ]
+    for var in slurm_vars:
+        value = os.environ.get(var)
+        if value:
+            match = re.match(r"(\d+)", str(value))
+            if match:
+                try:
+                    n = int(match.group(1))
+                    if n > 0:
+                        return n
+                except ValueError:
+                    pass
+    # Fallback to system CPU count
+    return os.cpu_count() or 1

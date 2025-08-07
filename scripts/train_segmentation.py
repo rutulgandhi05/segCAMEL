@@ -8,58 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 from models.PTv3.model import PointTransformerV3
-
-class PointCloudDataset(torch.utils.data.Dataset):
-    def __init__(self, root_dir: Path):
-        self.files = sorted(list(Path(root_dir).glob("*.pth")))
-        assert len(self.files), f"No .pth files found in {root_dir}"
-
-    def __len__(self):
-        return len(self.files)
-
-    def __getitem__(self, idx):
-        sample = torch.load(self.files[idx])
-        return {
-            "coord": sample["coord"],
-            "feat": sample["feat"],
-            "dino_feat": sample["dino_feat"],
-            "grid_size": float(sample.get("grid_size", 0.05)),
-            "mask": sample["mask"], 
-        }
-
-def collate_for_ptv3(batch):
-    collated = {
-        "coord": [],
-        "feat": [],
-        "dino_feat": [],
-        "grid_size": [],
-        "mask": [],
-        "batch": [],
-        "offset": [],
-    }
-
-    offset = 0
-    for batch_id, sample in enumerate(batch):
-        N = sample["coord"].shape[0]
-        collated["coord"].append(sample["coord"])
-        collated["feat"].append(sample["feat"])
-        collated["dino_feat"].append(sample["dino_feat"])
-        collated["mask"].append(sample["mask"])
-        collated["grid_size"].append(sample["grid_size"])
-        collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
-        offset += N
-        collated["offset"].append(offset)
-        
-    for k in ["coord", "feat", "dino_feat", "mask", "batch"]:
-        collated[k] = torch.cat(collated[k], dim=0)
-    collated["grid_size"] = torch.tensor(collated["grid_size"])
-    collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
-    return collated
-
-def distillation_loss(pred_feat, target_feat):
-    pred = F.normalize(pred_feat, dim=1)
-    target = F.normalize(target_feat, dim=1)
-    return 1 - (pred * target).sum(dim=1).mean()
+from utils.misc import _resolve_default_workers
 
 def safe_grid_coord(coord, grid_size, logger=None):
     if not torch.is_tensor(grid_size):
@@ -77,23 +26,86 @@ def safe_grid_coord(coord, grid_size, logger=None):
 
     return grid_coord
 
+class PointCloudDataset(torch.utils.data.Dataset):
+    def __init__(self, root_dir: Path):
+        self.files = sorted(list(Path(root_dir).glob("*.pth")))
+        if not self.files:
+            raise FileNotFoundError(f"No .pth files found in {root_dir}")
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        sample = torch.load(self.files[idx])
+        grid_size = float(sample.get("grid_size", 0.05))
+        grid_coord = safe_grid_coord(sample["coord"], sample["grid_size"])
+        return {
+            "coord": sample["coord"],
+            "feat": sample["feat"],
+            "dino_feat": sample["dino_feat"],
+            "grid_size": grid_size,
+            "grid_coord": grid_coord,
+            "mask": sample["mask"], 
+        }
+
+def collate_for_ptv3(batch):
+    collated = {
+        "coord": [],
+        "feat": [],
+        "dino_feat": [],
+        "grid_size": [],
+        "grid_coord": [],
+        "mask": [],
+        "batch": [],
+        "offset": [],
+    }
+
+    offset = 0
+    for batch_id, sample in enumerate(batch):
+        N = sample["coord"].shape[0]
+        collated["coord"].append(sample["coord"])
+        collated["feat"].append(sample["feat"])
+        collated["dino_feat"].append(sample["dino_feat"])
+        collated["mask"].append(sample["mask"])
+        collated["grid_size"].append(sample["grid_size"])
+        collated["grid_coord"].append(sample["grid_coord"])
+        collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
+        offset += N
+        collated["offset"].append(offset)
+
+    for k in ["coord", "feat", "dino_feat", "mask", "batch", "grid_coord"]:
+        collated[k] = torch.cat(collated[k], dim=0)
+    collated["grid_size"] = torch.tensor(collated["grid_size"])
+    collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
+    return collated
+
+def distillation_loss(pred_feat, target_feat):
+    pred = F.normalize(pred_feat, dim=1)
+    target = F.normalize(target_feat, dim=1)
+    return 1 - (pred * target).sum(dim=1).mean()
+
+
 def train(
     data_dir,
     output_dir,
     epochs=5,
     batch_size=12,
-    workers=8,
+    workers=None,
     lr=2e-3,
     prefetch_factor=2,
     device="cuda" if torch.cuda.is_available() else "cpu",
     pct_start=0.04,
     total_steps=None,
+    use_data_parallel=True
 ):
 
     print(f"Starting training on device: {device}")
     print(f"Training data: {data_dir}")
 
     dataset = PointCloudDataset(data_dir)
+    if workers is None:
+        workers = _resolve_default_workers()
+    workers = max(1, int(workers))
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
                             shuffle=True,
@@ -122,6 +134,12 @@ def train(
     model = PointTransformerV3(in_channels=input_dim).to(device)
     #proj_head = torch.nn.Linear(getattr(model, 'out_channels', 64), dino_dim).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
+
+    if use_data_parallel and torch.cuda.device_count() > 1 and str(device).startswith("cuda"):
+        print(f"Using DataParallel across {torch.cuda.device_count()} GPUs")
+        model = torch.nn.DataParallel(model)
+        proj_head = torch.nn.DataParallel(proj_head)
+
     optimizer = torch.optim.AdamW(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -178,7 +196,7 @@ def train(
                 grid_size = batch["grid_size"].mean().item()
                 batch_tensor = batch["batch"].to(device)
                 offset = batch["offset"].to(device)
-                grid_coord = safe_grid_coord(coord, grid_size)
+                grid_coord = batch["grid_coord"].to(device)
 
                 if batch_idx == 0:
                     print(f"[Batch 0] input_feat: min={input_feat.min().item()}, max={input_feat.max().item()}, mean={input_feat.mean().item()}, std={input_feat.std().item()}")
@@ -253,9 +271,9 @@ def train(
                     if var in locals():
                         del locals()[var]
                 del batch
-                torch.cuda.empty_cache()
+            #torch.cuda.empty_cache()    
 
-        avg_loss = total_loss / len(dataloader)
+        avg_loss = total_loss / (len(dataloader) - skipped_batches)
         print(f"Avg Loss = {avg_loss:.6f}")
 
 
@@ -287,6 +305,8 @@ def train(
             print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
         print(f"[Epoch {epoch+1}] Skipped {skipped_batches} batches due to errors.")
+        if str(device).startswith("cuda"):
+            torch.cuda.empty_cache()
     print("Training complete.")
 
 if __name__ == "__main__":
@@ -300,8 +320,8 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
         epochs=20,
-        workers=16,
-        batch_size=12,
-        prefetch_factor=2,
+        workers=28,
+        batch_size=24,
+        prefetch_factor=4,
         lr=2e-3
     )

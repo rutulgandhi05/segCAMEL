@@ -1,6 +1,5 @@
 import io
 import numpy as np
-import pandas as pd
 
 from pathlib import Path
 from tqdm import tqdm
@@ -10,7 +9,7 @@ from scantinel.parse_mcap_pcl import parse_pcl
 from utils.misc import find_closest
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-
+from utils.misc import _resolve_default_workers
 
 def _process_hercules_bin(
     bin_path: Path,
@@ -53,6 +52,12 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     Efficient loader for the Hercules dataset from a folder.
     Returns a list of dictionaries, each with all fields needed for further batching.
     """
+    # Determine the number of workers to use for the ProcessPool
+    if max_workers is None:
+        max_workers = _resolve_default_workers()
+    # Ensure at least one worker
+    max_workers = max(1, int(max_workers))
+
     # Paths
     lidar_folder = dataset_folder / "Avea_data" / "LiDAR" / "Aeva"
     left_img_folder = dataset_folder / "Image" / "stereo_left"
@@ -69,10 +74,12 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
         D = np.fromstring(lines[6], sep="\t" if "\t" in lines[6] else " ", dtype=np.float32)
         return K, D
 
-    stereo_left_intr, stereo_left_dist = load_intrinsics(calib_folder / "stereo_left.yaml")
-    stereo_right_intr, stereo_right_dist = load_intrinsics(calib_folder / "stereo_right.yaml")
+    stereo_left_intr, _ = load_intrinsics(calib_folder / "stereo_left.yaml")
+    stereo_right_intr, _ = load_intrinsics(calib_folder / "stereo_right.yaml")
 
-    # Extrinsics
+    # Load extrinsics from text file.  Each extrinsic is stored as a 3x4 matrix
+    # preceded by a label in the first column.  The helper returns a 4x4 matrix
+    # in homogeneous coordinates.
     lines = (calib_folder / "stereo_lidar.txt").read_text().splitlines()
     def _get_ext(idx):
         mat = np.fromstring(" ".join(lines[idx].split()[1:]), sep=" ", dtype=np.float32).reshape(3, 4)
