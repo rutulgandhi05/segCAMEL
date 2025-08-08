@@ -106,6 +106,9 @@ def train(
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
+
+    print(f"Using {workers} DataLoader workers for training...")
+
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
                             shuffle=True,
@@ -271,7 +274,7 @@ def train(
                     if var in locals():
                         del locals()[var]
                 del batch
-            torch.cuda.empty_cache()    
+                torch.cuda.empty_cache()    
 
         avg_loss = total_loss / (len(dataloader) - skipped_batches)
         print(f"Avg Loss = {avg_loss:.6f}")
@@ -319,10 +322,10 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
-        epochs=20,
-        workers=32,
+        epochs=2,
+        workers=None,
         batch_size=12,
-        prefetch_factor=2,
+        prefetch_factor=4,
         lr=2e-3,
-        use_data_parallel=False
+        use_data_parallel=True
     )

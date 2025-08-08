@@ -40,7 +40,7 @@ def preprocess_and_save_hercules(
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
-    print(f"Using {workers} DataLoader workers")
+    print(f"Using {workers} DataLoader workers for preprocessing...")
 
     extractor = Extractor()
     dataset = HerculesDataset(
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     save_dir = Path(str(save_dir))
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    folders = ["Mountain_01_Day", "Library_01_Day", "Sports_complex_01_Day"]
+    folders = [ "Library_01_Day", "Sports_complex_01_Day"] #"Mountain_01_Day",
     #folders = [ "Sports_complex_03_Day"] #inference only
 
     frame_counter = 0
@@ -187,7 +187,7 @@ if __name__ == "__main__":
         frame_counter  = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
-            workers=32,
+            workers=None,
             batch_size=16,     
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=frame_counter
