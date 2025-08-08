@@ -41,7 +41,11 @@ class HerculesDataset(Dataset):
         PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
 
         Args:
-            root_dir (str or Path): Dataset folder.
+            root_dir: sequence folder path
+            transform_factory: TransformFactory from your Extractor
+            max_workers: passed to loader
+            use_right_image: prefer right view; fallback to left if right missing
+            return_all_fields: ask loader to return XYZ+features (reflectivity, velocity, [intensity])
         """
         self.root_dir = Path(root_dir)
         print(f"Loading Hercules dataset from {self.root_dir}")
@@ -54,49 +58,57 @@ class HerculesDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        # Choose which stereo image to use.  The loader guarantees that at
-        # least one of left_image/right_image is not None.
-        img_path = sample["right_image"] if self.use_right_image else sample["left_image"]
-        # Load and convert to RGB; resize to the target resolution expected by the
-        # transform factory
-        with Image.open(img_path).convert("RGB") as img:
-            # Many vision models expect specific input resolutions.  Resize
-            # according to the factory provided by the caller.
-            # If no factory is provided, images are returned at their original size.
-            if self.transform_factory is not None:
-                # Let the factory inspect the raw image size
-                transform = self.transform_factory.get_transform((img.width, img.height))
-                # Resize to the configured size (e.g. 672x378) using Lanczos for
-                # high‑quality downsampling
-                img = img.resize((transform.resize_size[0], transform.resize_size[1]), Image.LANCZOS)
-                image_tensor = transform.transform(img)
-                input_size = transform.resize_size
-                feature_map_size = transform.feature_map_size
-            else:
-                # No transformation factory; use default PILToTensor
-                transform = transforms.PILToTensor()
-                image_tensor = transform(img)
-                input_size = (img.width, img.height)
-                feature_map_size = (img.width, img.height)
-        
 
-        pointcloud = sample["pointcloud"]
-        pointcloud_tensor = torch.from_numpy(pointcloud)
-        intrinsics = sample["stereo_right_intrinsics"] if self.use_right_image else sample["stereo_left_intrinsics"]
-        # Scale intrinsics to match the resized image
-        scaled_intrinsics = scale_intrinsics(intrinsics, (img.width, img.height), input_size)
-        extrinsics = (
-            sample["lidar_to_stereo_right_extrinsic"]
-            if self.use_right_image
-            else sample["lidar_to_stereo_left_extrinsic"]
-        )
+        # pointcloud -> torch.float32
+        pointcloud_tensor = torch.from_numpy(sample["pointcloud"]).to(torch.float32)
+
+        right_path = sample.get("right_image")
+        left_path = sample.get("left_image")
+        used_camera = "right" if self.use_right_image and right_path is not None else "left"
+        img_path = right_path if (used_camera == "right") else left_path
+
+        if img_path is None:
+            raise FileNotFoundError(f"No image found for sample index {idx} (left/right both None)")
+
+        img = Image.open(img_path).convert("RGB")
+        orig_size = img.size  # (W, H)
+
+        if self.transform_factory is not None:
+            tf = self.transform_factory.get_transform(orig_size)
+            image_tensor = tf(img)  # [C,H,W] torch.Tensor
+            input_size = tf.resize_size  # (W, H)
+            feature_map_size = tf.feature_map_size  # (Wf, Hf)
+        else:
+            image_tensor = self.fallback_transform(img)
+            input_size = img.size
+            feature_map_size = (input_size[0] // 14, input_size[1] // 14)
+
+        img.close()
+        
+        if used_camera == "right":
+            intrinsics = sample["stereo_right_intrinsics"]
+            extrinsics = sample["lidar_to_stereo_right_extrinsic"]
+        else:
+            intrinsics = sample["stereo_left_intrinsics"]
+            extrinsics = sample["lidar_to_stereo_left_extrinsic"]
+
+        intrinsics = torch.from_numpy(intrinsics).to(torch.float32)
+        extrinsics = torch.from_numpy(extrinsics).to(torch.float32)
+        scaled_intrinsics = torch.from_numpy(scale_intrinsics(intrinsics.numpy(), orig_size, input_size)).to(torch.float32)
+
+        try:
+            image_relpath = str(Path(img_path).relative_to(self.root_dir))
+        except Exception:
+            image_relpath = str(img_path)
 
         return {
             "pointcloud": pointcloud_tensor,
             "image_tensor": image_tensor,
             "timestamps": sample["timestamps"],
-            "intrinsics": torch.from_numpy(scaled_intrinsics),
-            "extrinsics": torch.from_numpy(extrinsics),
+            "intrinsics": scaled_intrinsics,
+            "extrinsics": extrinsics,
             "input_size": input_size,
-            "feature_map_size": feature_map_size
+            "feature_map_size": feature_map_size,
+            "image_relpath": image_relpath,
+            "used_camera": used_camera,
         }

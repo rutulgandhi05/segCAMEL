@@ -1,15 +1,91 @@
 import io
-import numpy as np
-
 from pathlib import Path
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor
+
+import numpy as np
 from tqdm import tqdm
-from hercules.aeva import load_aeva_bin
+
+from hercules.aeva import load_aeva_bin  # keep your parser as-is
 from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
-from utils.misc import find_closest
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
-from utils.misc import _resolve_default_workers
+from utils.misc import find_closest, _resolve_default_workers
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def _safe_K(default_hw=(640, 480)):
+    # Fallback intrinsics if YAML missing or malformed
+    fx, fy = default_hw[0], default_hw[1]
+    cx, cy = default_hw[0] / 2.0, default_hw[1] / 2.0
+    return np.array([[fx, 0, cx],
+                     [0, fy, cy],
+                     [0,  0,  1]], dtype=np.float32)
+
+
+def _load_intrinsics_yaml(file_path: Path):
+    """
+    Very lightweight parser: expects numeric line for K on line ~3 and D on ~6.
+    Returns (K, D). If not present/malformed -> (identity_K, None).
+    """
+    if not file_path.exists():
+        return _safe_K(), None
+    try:
+        lines = file_path.read_text().splitlines()
+        # Try to parse numeric tokens from lines[3] and lines[6]
+        def _nums(s): return np.fromstring(s, sep="\t" if "\t" in s else " ", dtype=np.float32)
+        K = _nums(lines[3]) if len(lines) > 3 else np.array([])
+        K = K.reshape(3, 3) if K.size == 9 else _safe_K()
+        D = _nums(lines[6]) if len(lines) > 6 else None
+        return K.astype(np.float32), (D.astype(np.float32) if D is not None and D.size > 0 else None)
+    except Exception:
+        return _safe_K(), None
+
+
+def _load_extrinsics_txt(file_path: Path, left_idx=1, right_idx=4):
+    """
+    stereo_lidar.txt parser: each matrix row looks like '<label> r11 r12 r13 t1 ...'
+    Returns (lidar_to_left_4x4, lidar_to_right_4x4). On failure -> (I, I).
+    """
+    I = np.eye(4, dtype=np.float32)
+    if not file_path.exists():
+        return I, I
+    try:
+        lines = file_path.read_text().splitlines()
+
+        def _get_ext(idx):
+            parts = lines[idx].split()
+            mat = np.fromstring(" ".join(parts[1:]), sep=" ", dtype=np.float32)
+            mat = mat.reshape(3, 4)
+            return np.vstack([mat, [0, 0, 0, 1]]).astype(np.float32)
+
+        return _get_ext(left_idx), _get_ext(right_idx)
+    except Exception:
+        return I, I
+
+
+def _first_existing_path(*candidates: Path) -> Path:
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]  # return first candidate even if missing, so glob() just yields empty
+
+
+def _glob_images(folder: Path):
+    if not folder.exists():
+        return []
+    imgs = []
+    for ext in ("*.png", "*.jpg", "*.jpeg"):
+        imgs.extend(sorted(folder.glob(ext)))
+    return imgs
+
+
+def _int_stem(p: Path):
+    try:
+        return int(p.stem)
+    except Exception:
+        return None
 
 def _process_hercules_bin(
     bin_path: Path,
@@ -49,54 +125,46 @@ def _process_hercules_bin(
 
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, max_workers: int = None):
     """
-    Efficient loader for the Hercules dataset from a folder.
-    Returns a list of dictionaries, each with all fields needed for further batching.
+    Hercules dataset.
+    Returns a list[dict]:
+      - pointcloud (np.ndarray)
+      - left_image / right_image (Path or None)
+      - timestamps [lidar_ts, left_ts, right_ts]
+      - stereo_left_intrinsics / stereo_right_intrinsics (np.ndarray 3x3)
+      - lidar_to_stereo_left_extrinsic / lidar_to_stereo_right_extrinsic (np.ndarray 4x4)
     """
-    # Determine the number of workers to use for the ProcessPool
+    dataset_folder = Path(dataset_folder)
+
+    # number of workers to use for the ProcessPool
     if max_workers is None:
         max_workers = _resolve_default_workers()
     # Ensure at least one worker
     max_workers = max(1, int(max_workers))
 
     # Paths
-    lidar_folder = dataset_folder / "Avea_data" / "LiDAR" / "Aeva"
+    lidar_folder = _first_existing_path(
+        dataset_folder / "Aeva_data" / "LiDAR" / "Aeva",
+        dataset_folder / "Avea_data" / "LiDAR" / "Aeva",
+    )
     left_img_folder = dataset_folder / "Image" / "stereo_left"
     right_img_folder = dataset_folder / "Image" / "stereo_right"
     calib_folder = dataset_folder / "Calibration"
 
-    # Load calibration intrinsics
-    def load_intrinsics(file_path: Path):
-        if not file_path.exists():
-            return None, None
-        lines = file_path.read_text().splitlines()
-        K = np.fromstring(lines[3], sep="\t" if "\t" in lines[3] else " ", dtype=np.float32)
-        K = K.reshape(3, 3) if K.size == 9 else None
-        D = np.fromstring(lines[6], sep="\t" if "\t" in lines[6] else " ", dtype=np.float32)
-        return K, D
+    # --- Calibration ---
+    stereo_left_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_left.yaml")
+    stereo_right_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_right.yaml")
+    lidar_to_left_ext, lidar_to_right_ext = _load_extrinsics_txt(calib_folder / "stereo_lidar.txt")
 
-    stereo_left_intr, _ = load_intrinsics(calib_folder / "stereo_left.yaml")
-    stereo_right_intr, _ = load_intrinsics(calib_folder / "stereo_right.yaml")
+    # --- Images ---
+    left_images = _glob_images(left_img_folder)
+    right_images = _glob_images(right_img_folder)
 
-    # Load extrinsics from text file.  Each extrinsic is stored as a 3x4 matrix
-    # preceded by a label in the first column.  The helper returns a 4x4 matrix
-    # in homogeneous coordinates.
-    lines = (calib_folder / "stereo_lidar.txt").read_text().splitlines()
-    def _get_ext(idx):
-        mat = np.fromstring(" ".join(lines[idx].split()[1:]), sep=" ", dtype=np.float32).reshape(3, 4)
-        return np.vstack([mat, [0,0,0,1]]).astype(np.float32)
+    left_stamps = [s for s in (_int_stem(p) for p in left_images) if s is not None]
+    right_stamps = [s for s in (_int_stem(p) for p in right_images) if s is not None]
+    left_dict = {int(p.stem): p for p in left_images if _int_stem(p) is not None}
+    right_dict = {int(p.stem): p for p in right_images if _int_stem(p) is not None}
 
-    lidar_to_left_ext  = _get_ext(1)
-    lidar_to_right_ext = _get_ext(4)
-
-    left_images  = sorted(left_img_folder.glob("*.png"))  if left_img_folder.exists()  else []
-    right_images = sorted(right_img_folder.glob("*.png")) if right_img_folder.exists() else []
-
-    left_stamps = sorted(int(p.stem) for p in left_images)
-    right_stamps = sorted(int(p.stem) for p in right_images)
-    left_dict  = {int(p.stem): p for p in left_images}
-    right_dict = {int(p.stem): p for p in right_images}
-
-    # Files
+    # --- LiDAR files ---
     bin_files = sorted(lidar_folder.glob("*.bin"))
     
     process_fn = partial(
@@ -112,8 +180,7 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
         lidar_to_right_ext=lidar_to_right_ext,
     )
 
-    # --- 6. Parallel execution ---
-    # Parallel execution
+    # --- Parallel execution ---
     paired_samples: list[dict] = []
     with ProcessPoolExecutor(max_workers=max_workers) as exe:
         for result in tqdm(exe.map(process_fn, bin_files), total=len(bin_files), desc="Loading & pairing", unit="file"):

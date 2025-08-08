@@ -12,19 +12,13 @@ from utils.misc import _resolve_default_workers
 
 def safe_grid_coord(coord, grid_size, logger=None):
     if not torch.is_tensor(grid_size):
-        grid_size = torch.tensor(grid_size, device=coord.device)
+        grid_size = torch.tensor(grid_size, device=coord.device,  dtype=coord.dtype)
     else:
-        grid_size = grid_size.to(coord.device)
+        grid_size = grid_size.to(coord.device,  dtype=coord.dtype)
 
-    coord_min = coord.min(0)[0]
-    grid_coord = ((coord - coord_min) / grid_size).floor().int()
-
-    for axis in range(3):
-        n_unique = len(torch.unique(grid_coord[:, axis]))
-        if n_unique < 2:
-            grid_coord[:, axis] += torch.arange(grid_coord.shape[0], device=grid_coord.device) % 2
-
-    return grid_coord
+    coord_min = coord.min(dim=0, keepdim=True).values
+    grid = torch.floor((coord - coord_min) / (grid_size + 1e-8)).to(torch.int32)
+    return grid
 
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path):
@@ -37,15 +31,14 @@ class PointCloudDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         sample = torch.load(self.files[idx])
-        grid_size = float(sample.get("grid_size", 0.05))
         grid_coord = safe_grid_coord(sample["coord"], sample["grid_size"])
         return {
-            "coord": sample["coord"],
-            "feat": sample["feat"],
-            "dino_feat": sample["dino_feat"],
-            "grid_size": grid_size,
-            "grid_coord": grid_coord,
-            "mask": sample["mask"], 
+            "coord": sample["coord"],               # (N,3) float32
+            "feat": sample["feat"],                 # (N,F) float32
+            "dino_feat": sample["dino_feat"],       # (N,D) float32 or float16
+            "mask": sample["mask"],                 # (N,) bool/uint8
+            "grid_size": sample["grid_size"],       # scalar
+            "grid_coord": grid_coord,               # (N,3) int32
         }
 
 def collate_for_ptv3(batch):
@@ -84,6 +77,31 @@ def distillation_loss(pred_feat, target_feat):
     target = F.normalize(target_feat, dim=1)
     return 1 - (pred * target).sum(dim=1).mean()
 
+def _load_state(m, state):
+    """
+    Load a state_dict regardless of DataParallel wrapping differences.
+    Tries raw, then strip 'module.', then add 'module.'.
+    """
+    try:
+        m.load_state_dict(state)
+        return
+    except Exception:
+        pass
+    try:
+        stripped = {k.replace("module.", "", 1) if k.startswith("module.") else k: v
+                    for k, v in state.items()}
+        m.load_state_dict(stripped)
+        return
+    except Exception:
+        pass
+    try:
+        added = {("module." + k if not k.startswith("module.") else k): v
+                 for k, v in state.items()}
+        m.load_state_dict(added)
+        return
+    except Exception as e:
+        raise e
+    
 
 def train(
     data_dir,
@@ -98,6 +116,10 @@ def train(
     total_steps=None,
     use_data_parallel=True
 ):
+    device = torch.device(device)
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
 
     print(f"Starting training on device: {device}")
     print(f"Training data: {data_dir}")
@@ -135,7 +157,6 @@ def train(
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
 
     model = PointTransformerV3(in_channels=input_dim).to(device)
-    #proj_head = torch.nn.Linear(getattr(model, 'out_channels', 64), dino_dim).to(device)
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     if use_data_parallel and torch.cuda.device_count() > 1 and str(device).startswith("cuda"):
@@ -143,7 +164,9 @@ def train(
         model = torch.nn.DataParallel(model)
         proj_head = torch.nn.DataParallel(proj_head)
 
-    optimizer = torch.optim.AdamW(list(model.parameters()) + list(proj_head.parameters()), lr=lr)
+    optimizer = torch.optim.AdamW(list(model.parameters()) + list(proj_head.parameters()), 
+                                  lr=lr,
+                                  weight_decay=0.05)
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -168,45 +191,54 @@ def train(
     if latest_ckpt_path.exists():
         print(f"Resuming from checkpoint: {latest_ckpt_path}")
         checkpoint = torch.load(latest_ckpt_path, map_location=device)
-        model.load_state_dict(checkpoint["model"])
-        proj_head.load_state_dict(checkpoint["proj_head"])
+        _load_state(model, checkpoint["model"])
+        _load_state(proj_head, checkpoint["proj_head"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-        scaler.load_state_dict(checkpoint["scaler"])
+        # scaler may be absent or disabled; guard
+        if "scaler" in checkpoint:
+            try:
+                scaler.load_state_dict(checkpoint["scaler"])
+            except Exception:
+                pass
         scheduler.load_state_dict(checkpoint["scheduler"])
-        start_epoch = checkpoint["epoch"] + 1
-        best_loss = checkpoint["best_loss"]
+        start_epoch = checkpoint.get("epoch", -1) + 1
+        best_loss = checkpoint.get("best_loss", float("inf"))
         print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
+
+    # Autocast kwargs
+    autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if device.type == "cuda" else {"device_type": "cpu"}
 
 
     for epoch in range(epochs):
         model.train()
         proj_head.train()
-        total_loss = 0
+        total_loss = 0.0
         print(f"\nEpoch {epoch + 1}/{epochs}")
 
         skipped_batches = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
-                coord = batch["coord"].to(device)
-                feat = batch["feat"].to(device)
+                coord = batch["coord"].to(device, non_blocking=True)
+                feat = batch["feat"].to(device, non_blocking=True).float()
+                dino_feat = batch["dino_feat"].to(device, non_blocking=True).float()   # upcast in case saved fp16
+                mask = batch["mask"].to(device, non_blocking=True).bool()
+                grid_size = batch["grid_size"].mean().item()
+                batch_tensor = batch["batch"].to(device, non_blocking=True)
+                offset = batch["offset"].to(device, non_blocking=True)
+                grid_coord = batch["grid_coord"].to(device, non_blocking=True)
 
+                # Normalize coord/feat per-batch before concat
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
                 feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
                 input_feat = torch.cat([coord, feat], dim=1)
 
-                dino_feat = batch["dino_feat"].to(device)
-                mask = batch["mask"].to(device)
-                grid_size = batch["grid_size"].mean().item()
-                batch_tensor = batch["batch"].to(device)
-                offset = batch["offset"].to(device)
-                grid_coord = batch["grid_coord"].to(device)
-
                 if batch_idx == 0:
-                    print(f"[Batch 0] input_feat: min={input_feat.min().item()}, max={input_feat.max().item()}, mean={input_feat.mean().item()}, std={input_feat.std().item()}")
-                    print(f"  Any NaN: {torch.isnan(input_feat).any().item()}, Any Inf: {torch.isinf(input_feat).any().item()}")
-
+                    print(f"[Batch 0] input_feat stats: min={input_feat.min().item():.4f}, "
+                          f"max={input_feat.max().item():.4f}, mean={input_feat.mean().item():.4f}, "
+                          f"std={input_feat.std().item():.4f}")
+                    
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
-                    print(f"[ERROR][Batch {batch_idx}] NaN or Inf in input_feat, skipping batch")
+                    print(f"[ERROR][Batch {batch_idx}] NaN/Inf in input_feat, skipping batch")
                     skipped_batches += 1
                     continue
                 if input_feat.abs().sum().item() == 0:
@@ -223,37 +255,36 @@ def train(
                     "batch": batch_tensor,
                 }
 
-                optimizer.zero_grad()
-                with autocast(device_type=device):
+                optimizer.zero_grad(set_to_none=True)
+                with autocast(**autocast_kwargs):
                     output = model(data_dict)
                     if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
-                        print(f"[ERROR][Batch {batch_idx}] NaN or Inf in model output, skipping batch")
+                        print(f"[ERROR][Batch {batch_idx}] NaN/Inf in model output, skipping batch")
                         skipped_batches += 1
                         continue
 
                     pred_proj = proj_head(output.feat)
                     if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
-                        print(f"[ERROR][Batch {batch_idx}] NaN or Inf in proj_head output, skipping batch")
+                        print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
                         skipped_batches += 1
                         continue
                    
-                    valid_mask = mask.bool()                   
+                    # Distill on visible points only
+                    valid_mask = mask
+                    if valid_mask.sum().item() == 0:
+                        print(f"[WARN][Batch {batch_idx}] No visible points; skipping batch")
+                        skipped_batches += 1
+                        continue
+
                     pred_valid = pred_proj[valid_mask]
                     dino_valid = dino_feat[valid_mask]
-                    if pred_valid.shape[0] != dino_valid.shape[0]:
-                        print(f"[ERROR][Batch {batch_idx}] Masked shape mismatch: {pred_valid.shape} vs {dino_valid.shape}, skipping batch")
-                        skipped_batches += 1
-                        continue
-
                     loss = distillation_loss(pred_valid, dino_valid)
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"[ERROR][Batch {batch_idx}] Loss is NaN or Inf, skipping batch")
-                        skipped_batches += 1
-                        continue
-                
 
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(proj_head.parameters(), max_norm=1.0)
+               
                 scaler.step(optimizer)
                 scaler.update()
                 scheduler.step()
@@ -265,7 +296,7 @@ def train(
                 continue
 
             finally:
-                # Explicitly delete large variables for memory safety
+                # Explicitly delete large variables (NO per-batch empty_cache)
                 for var in [
                     "coord", "feat", "dino_feat", "mask", "grid_size", "batch_tensor",
                     "offset", "input_feat", "grid_coord", "output", "pred_proj",
@@ -274,49 +305,56 @@ def train(
                     if var in locals():
                         del locals()[var]
                 del batch
-                torch.cuda.empty_cache()    
+                #torch.cuda.empty_cache()    
 
-        avg_loss = total_loss / (len(dataloader) - skipped_batches)
+        denom = len(dataloader) - skipped_batches
+        if denom <= 0:
+            print("[WARN] All batches skipped this epoch; not updating best model.")
+            avg_loss = float("inf")
+        else:
+            avg_loss = total_loss / denom
         print(f"Avg Loss = {avg_loss:.6f}")
 
 
-        # Always save latest checkpoint for resume
-        latest_ckpt_this_epoch = output_dir / f"latest_checkpoint_epoch{epoch+1:04d}.pth"
-        torch.save({
-            "model": model.state_dict(),
-            "proj_head": proj_head.state_dict(),
+        # ---- Save latest (rolling) and epoch-suffixed checkpoints ----
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        # Get plain state_dicts (handle DP)
+        model_state = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
+        head_state = proj_head.module.state_dict() if isinstance(proj_head, torch.nn.DataParallel) else proj_head.state_dict()
+
+        state = {
+            "model": model_state,
+            "proj_head": head_state,
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(),
             "epoch": epoch,
             "best_loss": best_loss
-        }, latest_ckpt_this_epoch)
-        print(f"Latest checkpoint saved: {latest_ckpt_this_epoch}")
+        }
 
+        latest_ckpt_epoch = Path(output_dir) / f"latest_checkpoint_epoch{epoch+1:04d}.pth"
+        torch.save(state, latest_ckpt_epoch)
+        latest_ckpt_path = Path(output_dir) / "latest_checkpoint.pth"
+        torch.save(state, latest_ckpt_path)
+        print(f"Saved: {latest_ckpt_epoch.name} and latest_checkpoint.pth")
+
+        # ---- Save best ----
         if avg_loss < best_loss:
             best_loss = avg_loss
-            output_dir.mkdir(parents=True, exist_ok=True)
-            torch.save({
-                "model": model.state_dict(),
-                "proj_head": proj_head.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "scaler": scaler.state_dict(),
-                "epoch": epoch,
-                "best_loss": best_loss
-            }, best_ckpt_path)
+            torch.save(state, best_ckpt_path)
             print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
         print(f"[Epoch {epoch+1}] Skipped {skipped_batches} batches due to errors.")
-        if str(device).startswith("cuda"):
+        if device.type == "cuda":
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
+
     print("Training complete.")
 
 if __name__ == "__main__":
    
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
-
     TRAIN_CHECKPOINTS.mkdir(parents=True, exist_ok=True)
 
     train(
