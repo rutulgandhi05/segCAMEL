@@ -325,7 +325,7 @@ if __name__ == "__main__":
         epochs=2,
         workers=None,
         batch_size=12,
-        prefetch_factor=4,
+        prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=True
     )
