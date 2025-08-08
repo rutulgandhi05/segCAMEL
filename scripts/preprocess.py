@@ -149,6 +149,8 @@ def preprocess_and_save_hercules(
             if local_counter % 10 == 0 or local_counter == dataset_len:
                 print(f"[Queued] {save_path}")
 
+            torch.cuda.empty_cache()
+
     # --- end of main loop ---
     # wait for all writes to finish
     save_queue.join()
@@ -187,7 +189,7 @@ if __name__ == "__main__":
             save_dir=save_dir,
             workers=32,
             batch_size=16,     
-            prefetch_factor=4,  # tune based on your I/O vs CPU/GPU balance
+            prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=frame_counter
         )
 

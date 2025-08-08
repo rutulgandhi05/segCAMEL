@@ -271,7 +271,7 @@ def train(
                     if var in locals():
                         del locals()[var]
                 del batch
-            #torch.cuda.empty_cache()    
+            torch.cuda.empty_cache()    
 
         avg_loss = total_loss / (len(dataloader) - skipped_batches)
         print(f"Avg Loss = {avg_loss:.6f}")
@@ -322,7 +322,7 @@ if __name__ == "__main__":
         epochs=20,
         workers=32,
         batch_size=12,
-        prefetch_factor=4,
+        prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=False
     )
