@@ -75,7 +75,7 @@ class HerculesDataset(Dataset):
 
         if self.transform_factory is not None:
             tf = self.transform_factory.get_transform(orig_size)
-            image_tensor = tf(img)  # [C,H,W] torch.Tensor
+            image_tensor = tf.transform(img)  # [C,H,W] torch.Tensor
             input_size = tf.resize_size  # (W, H)
             feature_map_size = tf.feature_map_size  # (Wf, Hf)
         else:
@@ -84,7 +84,7 @@ class HerculesDataset(Dataset):
             feature_map_size = (input_size[0] // 14, input_size[1] // 14)
 
         img.close()
-        
+
         if used_camera == "right":
             intrinsics = sample["stereo_right_intrinsics"]
             extrinsics = sample["lidar_to_stereo_right_extrinsic"]
