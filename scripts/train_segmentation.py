@@ -55,13 +55,17 @@ def collate_for_ptv3(batch):
 
     offset = 0
     for batch_id, sample in enumerate(batch):
-        N = sample["coord"].shape[0]
-        collated["coord"].append(sample["coord"])
-        collated["feat"].append(sample["feat"])
-        collated["dino_feat"].append(sample["dino_feat"])
-        collated["mask"].append(sample["mask"])
-        collated["grid_size"].append(sample["grid_size"])
-        collated["grid_coord"].append(sample["grid_coord"])
+        m = sample["mask"].bool()
+        # filter here
+        coord = sample["coord"][m]
+        feat = sample["feat"][m]
+        dino = sample["dino_feat"][m]
+        grid = sample["grid_coord"][m]
+        N = coord.shape[0]
+        collated["coord"].append(coord)
+        collated["feat"].append(feat)
+        collated["dino_feat"].append(dino)
+        collated["grid_coord"].append(grid)
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
