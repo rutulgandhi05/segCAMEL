@@ -55,17 +55,23 @@ def collate_for_ptv3(batch):
 
     offset = 0
     for batch_id, sample in enumerate(batch):
-        m = sample["mask"].bool()
-        # filter here
-        coord = sample["coord"][m]
-        feat = sample["feat"][m]
-        dino = sample["dino_feat"][m]
-        grid = sample["grid_coord"][m]
+        coord = sample["coord"]
+        feat = sample["feat"]
+        dino = sample["dino_feat"]
+        grid = sample["grid_coord"]
+        mask = sample["mask"]
+
         N = coord.shape[0]
+        if N == 0:
+            # Skip empty sample altogether
+            continue
+
         collated["coord"].append(coord)
         collated["feat"].append(feat)
         collated["dino_feat"].append(dino)
         collated["grid_coord"].append(grid)
+        collated["mask"].append(mask)
+        collated["grid_size"].append(sample["grid_size"])
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
@@ -168,9 +174,11 @@ def train(
         model = torch.nn.DataParallel(model)
         proj_head = torch.nn.DataParallel(proj_head)
 
-    optimizer = torch.optim.AdamW(list(model.parameters()) + list(proj_head.parameters()), 
-                                  lr=lr,
-                                  weight_decay=0.05)
+    optimizer = torch.optim.AdamW(
+        list(model.parameters()) + list(proj_head.parameters()),
+        lr=lr,
+        weight_decay=0.05
+    )
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -183,7 +191,7 @@ def train(
         final_div_factor=100 # final LR = initial / final_div_factor
     )
 
-    scaler = GradScaler(device=device)
+    scaler = GradScaler(device=device, enabled=False)
     best_loss = float("inf")
     start_epoch = 0
 
@@ -222,6 +230,11 @@ def train(
         skipped_batches = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
+
+                if batch["coord"].numel() == 0:
+                    skipped_batches += 1
+                    continue
+
                 coord = batch["coord"].to(device, non_blocking=True)
                 feat = batch["feat"].to(device, non_blocking=True).float()
                 dino_feat = batch["dino_feat"].to(device, non_blocking=True).float()   # upcast in case saved fp16
