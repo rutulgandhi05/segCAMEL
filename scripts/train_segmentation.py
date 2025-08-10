@@ -365,5 +365,5 @@ if __name__ == "__main__":
         batch_size=12,
         prefetch_factor=2,
         lr=2e-3,
-        use_data_parallel=True
+        use_data_parallel=False
     )
