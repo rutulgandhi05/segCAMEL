@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import torch
 from pathlib import Path
@@ -163,7 +164,7 @@ def preprocess_and_save_hercules(
             payload = {
                 "coord": xyz.float().cpu(),               # (N,3)
                 "feat": feats.float().cpu(),              # (N,F)
-                "dino_feat": dino_feat.float().cpu(),     # (N,D)  (switch to .half() if you want smaller files)
+                "dino_feat": dino_feat.half().cpu(),     # (N,D)  (switch to .half() if you want smaller files)
                 "mask": vis_mask.cpu(),                   # (N,)
                 "grid_size": torch.tensor(GRID_SIZE),     # scalar
                 # tiny viz metadata
@@ -187,9 +188,12 @@ def preprocess_and_save_hercules(
     writer_thread.join()
     
     try:
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        gc.collect() 
         del extractor
+        del dataloader 
+        del dataset
+        torch.cuda.empty_cache()
+
     except Exception:
         pass
     if device == "cuda":
@@ -224,7 +228,7 @@ if __name__ == "__main__":
             root_dir=root_dir,
             save_dir=save_dir,
             workers=None,
-            batch_size=32,     
+            batch_size=16,     
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=counter 
         )
