@@ -191,7 +191,7 @@ def train(
         final_div_factor=100 # final LR = initial / final_div_factor
     )
 
-    scaler = GradScaler(device=device, enabled=False)
+    scaler = GradScaler(enabled=False)
     best_loss = float("inf")
     start_epoch = 0
 
@@ -235,14 +235,18 @@ def train(
                     skipped_batches += 1
                     continue
 
+                mask_cpu = batch["mask"].bool()
+                if mask_cpu.sum().item() == 0:
+                    skipped += 1
+                    continue
+                idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
+
                 coord = batch["coord"].to(device, non_blocking=True)
-                feat = batch["feat"].to(device, non_blocking=True).float()
-                dino_feat = batch["dino_feat"].to(device, non_blocking=True).float()   # upcast in case saved fp16
-                mask = batch["mask"].to(device, non_blocking=True).bool()
-                grid_size = batch["grid_size"].mean().item()
+                feat  = batch["feat"].to(device, non_blocking=True).float()
+                grid_coord = batch["grid_coord"].to(device, non_blocking=True)
                 batch_tensor = batch["batch"].to(device, non_blocking=True)
                 offset = batch["offset"].to(device, non_blocking=True)
-                grid_coord = batch["grid_coord"].to(device, non_blocking=True)
+                grid_size = batch["grid_size"].mean().item()
 
                 # Normalize coord/feat per-batch before concat
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
@@ -287,14 +291,10 @@ def train(
                         continue
                    
                     # Distill on visible points only
-                    valid_mask = mask
-                    if valid_mask.sum().item() == 0:
-                        print(f"[WARN][Batch {batch_idx}] No visible points; skipping batch")
-                        skipped_batches += 1
-                        continue
+                    idx = idx_cpu.to(device, non_blocking=True)
+                    pred_valid = pred_proj.index_select(0, idx)
+                    dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
 
-                    pred_valid = pred_proj[valid_mask]
-                    dino_valid = dino_feat[valid_mask]
                     loss = distillation_loss(pred_valid, dino_valid)
 
                 scaler.scale(loss).backward()

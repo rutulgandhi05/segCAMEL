@@ -187,6 +187,8 @@ def preprocess_and_save_hercules(
     writer_thread.join()
     
     try:
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
         del extractor
     except Exception:
         pass
