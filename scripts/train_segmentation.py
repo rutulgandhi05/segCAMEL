@@ -378,8 +378,8 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
         epochs=20,
-        workers=None,
-        batch_size=12,
+        workers=24,
+        batch_size=10,
         prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=False
