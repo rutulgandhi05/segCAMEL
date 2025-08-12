@@ -14,7 +14,6 @@ from utils.misc import _resolve_default_workers
 import torch.multiprocessing as mp
 try:
     mp.set_start_method("spawn", force=True)
-    print("Using 'spawn' start method for multiprocessing")
 except RuntimeError:
     print("Spawn method already set or not available, using default.")
     pass
@@ -92,9 +91,9 @@ def collate_for_ptv3(batch):
     collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
     return collated
 
-def distillation_loss(pred_feat, target_feat):
-    pred = F.normalize(pred_feat, dim=1)
-    target = F.normalize(target_feat, dim=1)
+def distillation_loss(pred_feat, target_feat, eps=1e-6):
+    pred = F.normalize(pred_feat, dim=1, eps=eps)
+    target = F.normalize(target_feat, dim=1, eps=eps)
     return 1 - (pred * target).sum(dim=1).mean()
 
 def _load_state(m, state):
@@ -129,7 +128,7 @@ def train(
     epochs=5,
     batch_size=12,
     workers=None,
-    lr=2e-3,
+    lr=1e-3,
     prefetch_factor=2,
     device="cuda" if torch.cuda.is_available() else "cpu",
     pct_start=0.04,
@@ -229,10 +228,10 @@ def train(
         print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
 
     # Autocast kwargs
-    autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if device.type == "cuda" else {"device_type": "cpu"}
+    # autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if device.type == "cuda" else {"device_type": "cpu"}
 
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
         proj_head.train()
         total_loss = 0.0
@@ -248,7 +247,7 @@ def train(
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
-                    skipped += 1
+                    skipped_batches += 1
                     continue
                 idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
@@ -265,16 +264,14 @@ def train(
                 input_feat = torch.cat([coord, feat], dim=1)
 
                 if batch_idx == 0:
-                    print(f"[Batch 0] input_feat stats: min={input_feat.min().item():.4f}, "
-                          f"max={input_feat.max().item():.4f}, mean={input_feat.mean().item():.4f}, "
-                          f"std={input_feat.std().item():.4f}")
-                    
+                    print(f"[Batch 0] input_feat stats: mean={input_feat.mean().item():.4f}, std={input_feat.std().item():.4f}")
+
+                # Basic input sanity
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in input_feat, skipping batch")
                     skipped_batches += 1
                     continue
-                if input_feat.abs().sum().item() == 0:
-                    print(f"[WARN][Batch {batch_idx}] All-zero input_feat, skipping batch")
+                if input_feat.numel() == 0:
                     skipped_batches += 1
                     continue
 
@@ -288,25 +285,29 @@ def train(
                 }
 
                 optimizer.zero_grad(set_to_none=True)
-                with autocast(**autocast_kwargs):
-                    output = model(data_dict)
-                    if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
-                        print(f"[ERROR][Batch {batch_idx}] NaN/Inf in model output, skipping batch")
-                        skipped_batches += 1
-                        continue
+                
+                # dwith autocast(**autocast_kwargs):
+                output = model(data_dict)
+                if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
+                    print(f"[ERROR][Batch {batch_idx}] NaN/Inf in model output, skipping batch")
+                    skipped_batches += 1
+                    continue
 
-                    pred_proj = proj_head(output.feat)
-                    if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
-                        print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
-                        skipped_batches += 1
-                        continue
+                feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4)
+                feats = feats.clamp_(-100, 100)
+
+                pred_proj = proj_head(feats.float())
+                if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
+                    print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
+                    skipped_batches += 1
+                    continue
                    
-                    # Distill on visible points only
-                    idx = idx_cpu.to(device, non_blocking=True)
-                    pred_valid = pred_proj.index_select(0, idx)
-                    dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
+                # Distill on visible points only
+                idx = idx_cpu.to(device, non_blocking=True)
+                pred_valid = pred_proj.index_select(0, idx)
+                dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
 
-                    loss = distillation_loss(pred_valid, dino_valid)
+                loss = distillation_loss(pred_valid, dino_valid)
 
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -392,6 +393,6 @@ if __name__ == "__main__":
         workers=24,
         batch_size=10,
         prefetch_factor=2,
-        lr=2e-3,
+        lr=1e-3,
         use_data_parallel=False
     )
