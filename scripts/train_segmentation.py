@@ -10,6 +10,16 @@ from torch.amp import GradScaler, autocast
 from models.PTv3.model import PointTransformerV3
 from utils.misc import _resolve_default_workers
 
+
+import torch.multiprocessing as mp
+try:
+    mp.set_start_method("spawn", force=True)
+    print("Using 'spawn' start method for multiprocessing")
+except RuntimeError:
+    print("Spawn method already set or not available, using default.")
+    pass
+
+
 def safe_grid_coord(coord, grid_size, logger=None):
     if not torch.is_tensor(grid_size):
         grid_size = torch.tensor(grid_size, device=coord.device,  dtype=coord.dtype)
@@ -146,9 +156,10 @@ def train(
                             shuffle=True,
                             num_workers=workers,
                             pin_memory=True,
-                            persistent_workers=True,
+                            persistent_workers=False,
                             prefetch_factor=prefetch_factor,
-                            collate_fn=collate_for_ptv3
+                            collate_fn=collate_for_ptv3,
+                            multiprocessing_context="spawn"
                             )
 
     print(f"Loaded {len(dataset)} preprocessed samples")
