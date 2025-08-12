@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
-from models.PTv3.model import PointTransformerV3
+from models.PTv3.model_ import PointTransformerV3
 from utils.misc import _resolve_default_workers
 
 
@@ -125,7 +125,7 @@ def _load_state(m, state):
 def train(
     data_dir,
     output_dir,
-    epochs=5,
+    epochs=20,
     batch_size=12,
     workers=None,
     lr=1e-3,
