@@ -2,6 +2,8 @@ import os
 import math
 from pathlib import Path
 from tqdm import tqdm
+from typing import Optional, Tuple
+from functools import partial
 
 import torch
 import torch.nn.functional as F
@@ -19,7 +21,7 @@ except RuntimeError:
     pass
 
 
-def safe_grid_coord(coord: torch.Tensor, grid_size, *, origin: torch.Tensor = None) -> torch.Tensor:
+def safe_grid_coord(coord: torch.Tensor, grid_size, *, origin: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Build integer voxel coordinates from RAW coords (not normalized).
     grid_size: float or 0-D tensor
@@ -50,8 +52,8 @@ class PointCloudDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         sample = torch.load(self.files[idx])
-        gsize = self.voxel_size if self.voxel_size is not None else sample["grid_size"]
-        grid_coord = safe_grid_coord(sample["coord"], sample["grid_size"])
+        gsize = self.voxel_size if self.voxel_size is not None else float(sample["grid_size"])
+        grid_coord = safe_grid_coord(sample["coord"], gsize)
         return {
             "coord": sample["coord"],               # (N,3) float32
             "feat": sample["feat"],                 # (N,F) float32
@@ -71,9 +73,9 @@ def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
 
 
 def _multiscale_voxel_select(
-    coord = torch.Tensor,
-    grid_sizes = (0.05, 0.10, 0.20),
-    r_bins = (30.0, 70.0),
+    coord: torch.Tensor,
+    grid_sizes: Tuple[float, float, float] = (0.05, 0.10, 0.20),
+    r_bins: Tuple[float, float] = (30.0, 70.0),
 ) -> torch.Tensor:
     """
     Distance-aware voxel selection (optional):
@@ -230,8 +232,7 @@ def train(
 
     print(f"Using {workers} DataLoader workers for training...")
 
-    def _collate(b):
-        return collate_for_ptv3(b, multiscale_voxel=multiscale_voxel)
+    collate_fn = partial(collate_for_ptv3, multiscale_voxel=multiscale_voxel)
 
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
@@ -240,7 +241,7 @@ def train(
                             pin_memory=True,
                             persistent_workers=False,
                             prefetch_factor=prefetch_factor,
-                            collate_fn=_collate,
+                            collate_fn=collate_fn,
                             multiprocessing_context="spawn"
                             )
 
@@ -357,7 +358,7 @@ def train(
                 grid_coord = batch["grid_coord"].to(device, non_blocking=True)
                 batch_tensor = batch["batch"].to(device, non_blocking=True)
                 offset = batch["offset"].to(device, non_blocking=True)
-                grid_size = batch["grid_size"].mean().item()
+                grid_size_val = batch["grid_size"].mean().item()
 
                 # Normalize coord/feat per-batch before concat
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
@@ -380,7 +381,7 @@ def train(
                     "coord": coord,
                     "feat": input_feat,
                     "grid_coord": grid_coord,
-                    "grid_size": grid_size,
+                    "grid_size": grid_size_val,
                     "offset": offset,
                     "batch": batch_tensor,
                 }
@@ -403,6 +404,7 @@ def train(
                 idx = idx_cpu.to(device, non_blocking=True)
                 pred_valid = pred_proj.index_select(0, idx)
                 dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
+                dino_valid = torch.nan_to_num(dino_valid, nan=0.0, posinf=1e4, neginf=-1e4)
 
                 loss_raw = distillation_loss(pred_valid, dino_valid)
                 loss = loss_raw / max(1, accum_steps)
