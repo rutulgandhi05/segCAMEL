@@ -176,7 +176,13 @@ def train(
     dino_dim = sample["dino_feat"].shape[1]
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
 
-    model = PointTransformerV3(in_channels=input_dim).to(device)
+    model = PointTransformerV3(in_channels=input_dim, 
+                               enable_flash=False, 
+                               upcast_attention=True, 
+                               enc_patch_size=(128, 128, 128, 128, 128), 
+                               dec_patch_size=(128, 128, 128, 128),
+                               upcast_softmax=True).to(device)
+    
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     if use_data_parallel and torch.cuda.device_count() > 1 and str(device).startswith("cuda"):
