@@ -19,38 +19,98 @@ except RuntimeError:
     pass
 
 
-def safe_grid_coord(coord, grid_size, logger=None):
+def safe_grid_coord(coord: torch.Tensor, grid_size, *, origin: torch.Tensor = None) -> torch.Tensor:
+    """
+    Build integer voxel coordinates from RAW coords (not normalized).
+    grid_size: float or 0-D tensor
+    origin: if provided (3,), use it as min; else compute per-sample min().
+    """
     if not torch.is_tensor(grid_size):
-        grid_size = torch.tensor(grid_size, device=coord.device,  dtype=coord.dtype)
+        grid_size = torch.tensor(grid_size, device=coord.device, dtype=coord.dtype)
     else:
-        grid_size = grid_size.to(coord.device,  dtype=coord.dtype)
+        grid_size = grid_size.to(device=coord.device, dtype=coord.dtype)
 
-    coord_min = coord.min(dim=0, keepdim=True).values
-    grid = torch.floor((coord - coord_min) / (grid_size + 1e-8)).to(torch.int32)
+    if origin is None:
+        origin = coord.min(dim=0, keepdim=True).values
+    else:
+        origin = origin.to(coord.device, coord.dtype).view(1, 3)
+
+    grid = torch.floor((coord - origin) / (grid_size + 1e-8)).to(torch.int32)
     return grid
 
 class PointCloudDataset(torch.utils.data.Dataset):
-    def __init__(self, root_dir: Path):
+    def __init__(self, root_dir: Path, voxel_size: float):
         self.files = sorted(list(Path(root_dir).glob("*.pth")))
         if not self.files:
             raise FileNotFoundError(f"No .pth files found in {root_dir}")
+        self.voxel_size = voxel_size
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
         sample = torch.load(self.files[idx])
+        gsize = self.voxel_size if self.voxel_size is not None else sample["grid_size"]
         grid_coord = safe_grid_coord(sample["coord"], sample["grid_size"])
         return {
             "coord": sample["coord"],               # (N,3) float32
             "feat": sample["feat"],                 # (N,F) float32
             "dino_feat": sample["dino_feat"],       # (N,D) float32 or float16
             "mask": sample["mask"],                 # (N,) bool/uint8
-            "grid_size": sample["grid_size"],       # scalar
+            "grid_size": torch.tensor(float(gsize)),       # scalar
             "grid_coord": grid_coord,               # (N,3) int32
         }
 
-def collate_for_ptv3(batch):
+
+def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
+    """Return indices of the first occurrence per voxel (grid_coord)."""
+    if indices_3d.numel() == 0:
+        return torch.empty((0,), dtype=torch.long)
+    _, sel = torch.unique(indices_3d, dim=0, return_index=True)
+    return sel.sort().values
+
+
+def _multiscale_voxel_select(
+    coord = torch.Tensor,
+    grid_sizes = (0.05, 0.10, 0.20),
+    r_bins = (30.0, 70.0),
+) -> torch.Tensor:
+    """
+    Distance-aware voxel selection (optional):
+      - near (<= r_bins[0])    : small voxels (e.g., 5 cm)
+      - mid  (r0, <= r_bins[1]): medium voxels (e.g., 10 cm)
+      - far  (> r_bins[1])     : large voxels (e.g., 20 cm)
+    Returns a 1-D index tensor selecting one point per voxel per bin.
+    """
+    if coord.numel() == 0:
+        return torch.empty((0,), dtype=torch.long)
+
+    # radial distance in XY plane is usually appropriate for LiDAR highway scenes
+    r_xy = torch.linalg.norm(coord[:, :2], dim=1)
+
+    near_mask = r_xy <= r_bins[0]
+    mid_mask  = (r_xy > r_bins[0]) & (r_xy <= r_bins[1])
+    far_mask  = r_xy > r_bins[1]
+
+    sels = []
+
+    for mask, gsize in zip((near_mask, mid_mask, far_mask), grid_sizes):
+        if mask.any():
+            sub_idx = mask.nonzero(as_tuple=False).squeeze(1)
+            sub_coord = coord.index_select(0, sub_idx)
+            sub_grid = safe_grid_coord(sub_coord, gsize)
+            sel_local = _unique_first(sub_grid)
+            sels.append(sub_idx.index_select(0, sel_local))
+
+    if len(sels) == 0:
+        return torch.empty((0,), dtype=torch.long)
+
+    sel = torch.cat(sels, dim=0)
+    # Keep order ascending for stable batching
+    return sel.sort().values
+
+
+def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
     collated = {
         "coord": [],
         "feat": [],
@@ -69,6 +129,24 @@ def collate_for_ptv3(batch):
         dino = sample["dino_feat"]
         grid = sample["grid_coord"]
         mask = sample["mask"]
+        gsize = float(sample["grid_size"])
+
+        if multiscale_voxel:
+            sel = _multiscale_voxel_select(coord, grid_sizes=(0.05, 0.10, 0.20), r_bins=(30.0, 70.0))
+        else:
+            sel = _unique_first(grid)
+
+        if sel.numel() > 0:
+            coord = coord.index_select(0, sel)
+            feat  = feat.index_select(0, sel)
+            dino  = dino.index_select(0, sel)
+            grid  = grid.index_select(0, sel)
+            mask  = mask.index_select(0, sel)
+        else:
+            # entire sample empty after voxelization
+            continue
+
+
 
         N = coord.shape[0]
         if N == 0:
@@ -80,7 +158,7 @@ def collate_for_ptv3(batch):
         collated["dino_feat"].append(dino)
         collated["grid_coord"].append(grid)
         collated["mask"].append(mask)
-        collated["grid_size"].append(sample["grid_size"])
+        collated["grid_size"].append(gsize)
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
@@ -99,7 +177,6 @@ def distillation_loss(pred_feat, target_feat, eps=1e-6):
 def _load_state(m, state):
     """
     Load a state_dict regardless of DataParallel wrapping differences.
-    Tries raw, then strip 'module.', then add 'module.'.
     """
     try:
         m.load_state_dict(state)
@@ -127,13 +204,16 @@ def train(
     output_dir,
     epochs=20,
     batch_size=12,
+    accum_steps=8,
     workers=None,
-    lr=1e-3,
+    lr=2e-3,
     prefetch_factor=2,
     device="cuda" if torch.cuda.is_available() else "cpu",
     pct_start=0.04,
     total_steps=None,
-    use_data_parallel=True
+    use_data_parallel=True,
+    voxel_size: float = 0.10,  # outdoor default
+    multiscale_voxel: bool = False, 
 ):
     device = torch.device(device)
     if device.type == "cuda":
@@ -143,12 +223,15 @@ def train(
     print(f"Starting training on device: {device}")
     print(f"Training data: {data_dir}")
 
-    dataset = PointCloudDataset(data_dir)
+    dataset = PointCloudDataset(data_dir, voxel_size=voxel_size)
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
 
     print(f"Using {workers} DataLoader workers for training...")
+
+    def _collate(b):
+        return collate_for_ptv3(b, multiscale_voxel=multiscale_voxel)
 
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
@@ -157,35 +240,46 @@ def train(
                             pin_memory=True,
                             persistent_workers=False,
                             prefetch_factor=prefetch_factor,
-                            collate_fn=collate_for_ptv3,
+                            collate_fn=_collate,
                             multiprocessing_context="spawn"
                             )
 
-    print(f"Loaded {len(dataset)} preprocessed samples")
-    steps_per_epoch = len(dataloader)
-    est_total_steps = epochs * steps_per_epoch
-    print(f"Batch size: {batch_size} | Epochs: {epochs} | Steps per epoch: {steps_per_epoch}")
-    print(f"Estimated total steps: {est_total_steps}")
-    if total_steps:
-        epochs = math.ceil(total_steps / steps_per_epoch)
-        print(f"Will train for {epochs} epochs to hit {total_steps} steps.")
+    num_batches = len(dataloader)
+    updates_per_epoch = math.ceil(max(1, num_batches) / max(1, accum_steps))
 
-    # --- Infer input_dim robustly based on input_mode and first sample
+    print(f"Loaded {len(dataset)} preprocessed samples")
+    print(f"Per-step batch size: {batch_size} | Accum steps: {accum_steps} | "
+          f"Effective batch: {batch_size * accum_steps}")
+    print(f"Epochs: {epochs} | Batches/epoch: {num_batches} | Updates/epoch: {updates_per_epoch}")
+    if multiscale_voxel:
+        print("Multi-scale voxelization: ON (near=5cm, mid=10cm, far=20cm)")
+    else:
+        print(f"Single voxel size: {voxel_size:.3f} m")
+
+    if total_steps:
+        epochs = math.ceil(total_steps / updates_per_epoch)
+        print(f"Will train for {epochs} epochs to hit ~{total_steps} optimizer steps.")
+
+    # Infer dims from a probe sample
     sample = dataset[0]
     input_dim = sample["coord"].shape[1] + sample["feat"].shape[1]
     dino_dim = sample["dino_feat"].shape[1]
     print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
 
-    model = PointTransformerV3(in_channels=input_dim, 
-                               enable_flash=False, 
-                               upcast_attention=True, 
-                               enc_patch_size=(128, 128, 128, 128, 128), 
-                               dec_patch_size=(128, 128, 128, 128),
-                               upcast_softmax=True).to(device)
+
+    model = PointTransformerV3(
+        in_channels=input_dim,
+        enable_flash=False,                          # classic attention
+        enc_patch_size=(256, 256, 256, 256, 256),    
+        dec_patch_size=(256, 256, 256, 256),
+        enable_rpe=False,                            # optional
+        upcast_attention=True,                       # safer QK numerics
+        upcast_softmax=True
+    ).to(device)
     
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
-    if use_data_parallel and torch.cuda.device_count() > 1 and str(device).startswith("cuda"):
+    if use_data_parallel and torch.cuda.device_count() > 1 and device.type == "cuda":
         print(f"Using DataParallel across {torch.cuda.device_count()} GPUs")
         model = torch.nn.DataParallel(model)
         proj_head = torch.nn.DataParallel(proj_head)
@@ -199,12 +293,12 @@ def train(
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
-        steps_per_epoch=steps_per_epoch,
+        steps_per_epoch=updates_per_epoch,
         epochs=epochs,
         pct_start=pct_start,
         anneal_strategy="cos",
-        div_factor=10,       # initial LR = max_lr / div_factor
-        final_div_factor=100 # final LR = initial / final_div_factor
+        div_factor=10,        # initial LR = max_lr / div_factor
+        final_div_factor=100  # final LR = initial / final_div_factor
     )
 
     scaler = GradScaler(enabled=False)
@@ -215,33 +309,34 @@ def train(
     best_ckpt_path = output_dir / "best_model.pth"
 
 
-    # ---- RESUME LOGIC ----
+    # Resume
     if latest_ckpt_path.exists():
         print(f"Resuming from checkpoint: {latest_ckpt_path}")
         checkpoint = torch.load(latest_ckpt_path, map_location=device)
         _load_state(model, checkpoint["model"])
         _load_state(proj_head, checkpoint["proj_head"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-        # scaler may be absent or disabled; guard
         if "scaler" in checkpoint:
-            try:
-                scaler.load_state_dict(checkpoint["scaler"])
-            except Exception:
-                pass
+            try: scaler.load_state_dict(checkpoint["scaler"])
+            except Exception: pass
         scheduler.load_state_dict(checkpoint["scheduler"])
         start_epoch = checkpoint.get("epoch", -1) + 1
         best_loss = checkpoint.get("best_loss", float("inf"))
         print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
 
-    # Autocast kwargs
-    # autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if device.type == "cuda" else {"device_type": "cpu"}
-
-
     for epoch in range(start_epoch, epochs):
         model.train()
         proj_head.train()
-        total_loss = 0.0
+
         print(f"\nEpoch {epoch + 1}/{epochs}")
+        skipped_batches = 0
+        oom_streak = 0
+
+        total_loss_raw = 0.0
+        counted_batches = 0
+        update_count = 0
+
+        optimizer.zero_grad(set_to_none=True)
 
         skipped_batches = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
@@ -290,15 +385,11 @@ def train(
                     "batch": batch_tensor,
                 }
 
-                optimizer.zero_grad(set_to_none=True)
-                
-                # dwith autocast(**autocast_kwargs):
-                output = model(data_dict)
-                if torch.isnan(output.feat).any() or torch.isinf(output.feat).any():
-                    print(f"[ERROR][Batch {batch_idx}] NaN/Inf in model output, skipping batch")
-                    skipped_batches += 1
-                    continue
+                # optimizer.zero_grad(set_to_none=True)
 
+                # with autocast(**autocast_kwargs):
+                output = model(data_dict)
+                
                 feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4)
                 feats = feats.clamp_(-100, 100)
 
@@ -313,17 +404,48 @@ def train(
                 pred_valid = pred_proj.index_select(0, idx)
                 dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
 
-                loss = distillation_loss(pred_valid, dino_valid)
+                loss_raw = distillation_loss(pred_valid, dino_valid)
+                loss = loss_raw / max(1, accum_steps)
+    
+                loss.backward()
+                counted_batches += 1
+                total_loss_raw += loss_raw.item()
 
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                torch.nn.utils.clip_grad_norm_(proj_head.parameters(), max_norm=1.0)
-               
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()
-                total_loss += loss.item()
+                # Optimizer step on accumulation boundary
+                if (counted_batches % accum_steps) == 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    torch.nn.utils.clip_grad_norm_(proj_head.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    scheduler.step()
+                    update_count += 1
+                    oom_streak = 0  # successful step resets OOM streak
+    
+            except RuntimeError as e:
+                # Handle CUDA OOM robustly
+                if "out of memory" in str(e).lower():
+                    skipped_batches += 1
+                    oom_streak += 1
+                    print(f"[OOM][Batch {batch_idx}] {str(e)} | streak={oom_streak}. "
+                          f"Clearing cache and continuing.")
+                    # Drop large refs to help defragment
+                    for var in [
+                        "coord","feat","grid_coord","batch_tensor","offset",
+                        "input_feat","output","feats","pred_proj",
+                        "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu"
+                    ]:
+                        if var in locals():
+                            del locals()[var]
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                    # If too many consecutive OOMs, break the epoch to avoid wasting time
+                    if oom_streak >= 5:
+                        print("[WARN] Too many consecutive OOMs; breaking to next epoch.")
+                        break
+                    continue
+                else:
+                    # Unknown runtime error: surface it
+                    raise
 
             except Exception as e:
                 print(f"Error processing batch {batch_idx}: {str(e)}")
@@ -333,22 +455,20 @@ def train(
             finally:
                 # Explicitly delete large variables (NO per-batch empty_cache)
                 for var in [
-                    "coord", "feat", "dino_feat", "mask", "grid_size", "batch_tensor",
-                    "offset", "input_feat", "grid_coord", "output", "pred_proj",
-                    "valid_mask", "pred_valid", "dino_valid", "loss"
+                    "coord","feat","grid_coord","batch_tensor","offset",
+                    "input_feat","output","feats","pred_proj",
+                    "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu"
                 ]:
                     if var in locals():
                         del locals()[var]
                 del batch
                 #torch.cuda.empty_cache()    
 
-        denom = len(dataloader) - skipped_batches
-        if denom <= 0:
-            print("[WARN] All batches skipped this epoch; not updating best model.")
-            avg_loss = float("inf")
-        else:
-            avg_loss = total_loss / denom
-        print(f"Avg Loss = {avg_loss:.6f}")
+        denom_batches = counted_batches if counted_batches > 0 else 1
+        avg_loss = total_loss_raw / denom_batches
+        print(f"Avg Loss (per batch) = {avg_loss:.6f} | "
+              f"Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
+
 
 
         # ---- Save latest (rolling) and epoch-suffixed checkpoints ----
@@ -396,9 +516,12 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
         epochs=20,
-        workers=24,
-        batch_size=10,
+        workers=12,
+        batch_size=4,
+        accum_steps=8,
         prefetch_factor=2,
-        lr=1e-3,
-        use_data_parallel=False
+        lr=2e-3,
+        use_data_parallel=False,
+        voxel_size=0.10,  # 10 cm voxel size
+        multiscale_voxel=False,
     )
