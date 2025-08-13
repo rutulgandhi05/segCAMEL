@@ -65,11 +65,35 @@ class PointCloudDataset(torch.utils.data.Dataset):
 
 
 def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
-    """Return indices of the first occurrence per voxel (grid_coord)."""
+    """
+    Return indices of the FIRST occurrence of each unique 3D voxel row in the ORIGINAL order,
+    without using torch.unique(..., return_index=...).
+
+    Works on both CPU/GPU tensors and old/new PyTorch versions.
+    Assumes indices_3d are non-negative (true in our pipeline: grid built from (coord - min)/voxel_size).
+    """
     if indices_3d.numel() == 0:
         return torch.empty((0,), dtype=torch.long)
-    _, sel = torch.unique(indices_3d, dim=0, return_index=True)
-    return sel.sort().values
+
+    g = indices_3d.to(torch.int64).contiguous()  # (N, 3)
+    # Build a monotonic 1D key per row: key = x*(My*Mz) + y*Mz + z
+    # This avoids lexsort; stays within int64 for realistic voxel ranges.
+    max_vals = g.max(dim=0).values + 1  # (3,)
+    max_vals = torch.clamp(max_vals, min=1)
+    M_yz = max_vals[1] * max_vals[2]
+
+    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]  # (N,)
+
+    # Stable sort by key, then take the first index of each run of equal keys
+    perm = torch.argsort(key, stable=True)
+    key_sorted = key[perm]
+
+    first_mask = torch.ones_like(key_sorted, dtype=torch.bool)
+    first_mask[1:] = key_sorted[1:] != key_sorted[:-1]
+
+    first_sorted = perm[first_mask]            # first occurrences in sorted order
+    sel = first_sorted.sort().values           # back to ascending ORIGINAL indices for stable batching
+    return sel
 
 
 def _multiscale_voxel_select(
@@ -391,10 +415,9 @@ def train(
                 # with autocast(**autocast_kwargs):
                 output = model(data_dict)
                 
-                feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4)
-                feats = feats.clamp_(-100, 100)
-
+                feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4).clamp_(-20, 20)
                 pred_proj = proj_head(feats.float())
+                pred_proj = torch.nan_to_num(pred_proj, nan=0.0, posinf=1e4, neginf=-1e4)
                 if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
                     skipped_batches += 1
