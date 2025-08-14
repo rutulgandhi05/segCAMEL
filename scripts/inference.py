@@ -71,6 +71,7 @@ def run_inference(
     ).to(device).eval()
 
     # Load checkpoint (model + head if present)
+    print(f"[inference] Loading checkpoint: {checkpoint_path}")
     ckpt = torch.load(checkpoint_path, map_location=device)
     if "model" in ckpt:
         _load_state(model, ckpt["model"])
@@ -133,7 +134,7 @@ if __name__ == "__main__":
   
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     CHECKPOINTS_DIR = Path(os.getenv("TRAIN_CHECKPOINTS"))
-    CHECKPOINT_PATH = CHECKPOINTS_DIR / "latest_checkpoint.pth"
+    CHECKPOINT_PATH = CHECKPOINTS_DIR / "best_model.pth"
     OUT_DIR = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
