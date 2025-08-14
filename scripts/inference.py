@@ -1,94 +1,151 @@
 import os
-import torch
-import numpy as np
-from tqdm import tqdm
 from pathlib import Path
-from models.PTv3.model import PointTransformerV3
+from functools import partial
 
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
+from models.PTv3.model_ import PointTransformerV3
+
+from scripts.train_segmentation import (
+    PointCloudDataset,
+    collate_for_ptv3,
+    _load_state
+)
+
+# Inference
 @torch.no_grad()
-def infer_one_file(model, proj_head, file_path, device):
-    sample = torch.load(file_path, map_location=device)
+def run_inference(
+    data_dir: Path,
+    checkpoint_path: Path,
+    out_dir: Path,
+    *,
+    voxel_size: float = 0.10,
+    multiscale_voxel: bool = False,
+    batch_size: int = 2,
+    workers: int = 8,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+):
+    """
+    Runs PTv3 forward (image-free) with the exact preprocessing used in training and
+    writes per-sample outputs: ptv3_feat (64-D), coord (normalized), grid_coord, mask, grid_size,
+    and proj_dino_pred if the checkpoint contains the projection head.
+    """
+    device = torch.device(device)
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
 
-    raw_coord = sample["coord"].to(device)
-    feat = sample["feat"].to(device)  # ✅ use all available features
+    print(f"[inference] Data: {data_dir}")
+    print(f"[inference] Checkpoint: {checkpoint_path}")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Normalize input
-    coord = (raw_coord - raw_coord.mean(dim=0)) / (raw_coord.std(dim=0) + 1e-6)
-    feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
-    input_feat = torch.cat([coord, feat], dim=1)
+    dataset = PointCloudDataset(data_dir, voxel_size=voxel_size)
+    collate_fn = partial(collate_for_ptv3, multiscale_voxel=multiscale_voxel)
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=True,
+        persistent_workers=False,
+        prefetch_factor=2,
+        collate_fn=collate_fn,
+        multiprocessing_context="spawn",
+    )
 
-    input_dim = input_feat.shape[1]
-    print(f"[INFO] Inferred input_feat shape: {input_feat.shape}, input_dim = {input_dim}")
+    # Probe dims
+    probe = dataset[0]
+    input_dim = probe["coord"].shape[1] + probe["feat"].shape[1]
+   
+    # Build model exactly like training
+    model = PointTransformerV3(
+        in_channels=input_dim,
+        enable_flash=False,
+        enc_patch_size=(256, 256, 256, 256, 256),
+        dec_patch_size=(256, 256, 256, 256),
+        enable_rpe=False,
+        upcast_attention=True,
+        upcast_softmax=True,
+    ).to(device).eval()
 
-    # Grid-related processing
-    grid_size = sample.get("grid_size", 0.05)
-    if not torch.is_tensor(grid_size):
-        grid_size = torch.tensor(grid_size, device=coord.device)
+    # Load checkpoint (model + head if present)
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    if "model" in ckpt:
+        _load_state(model, ckpt["model"])
+    else:
+        _load_state(model, ckpt)
 
-    coord_min = coord.min(0)[0]
-    grid_coord = ((coord - coord_min) / grid_size).floor().int()
-    for axis in range(3):
-        if len(torch.unique(grid_coord[:, axis])) < 2:
-            grid_coord[:, axis] += torch.arange(grid_coord.shape[0], device=grid_coord.device) % 2
+    for batch in tqdm(loader, desc="Inference"):
 
-    offset = torch.tensor([coord.shape[0]], dtype=torch.long, device=device)
-    batch = torch.zeros(coord.shape[0], dtype=torch.long, device=device)
+        # Move tensors
+        coord = batch["coord"].to(device, non_blocking=True)
+        feat  = batch["feat"].to(device, non_blocking=True).float()
+        grid_coord = batch["grid_coord"].to(device, non_blocking=True)
+        batch_tensor = batch["batch"].to(device, non_blocking=True)
+        offset = batch["offset"].to(device, non_blocking=True)
+        grid_size_val = batch["grid_size"].mean().item()
 
-    data_dict = {
-        "coord": coord,
-        "feat": input_feat,
-        "grid_coord": grid_coord,
-        "grid_size": grid_size,
-        "offset": offset,
-        "batch": batch,
-    }
+        # Same normalization as training (+ clamp to tame outliers)
+        coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
+        feat  = (feat  -  feat.mean(dim=0)) / ( feat.std(dim=0) + 1e-6)
+        input_feat = torch.cat([coord, feat], dim=1).clamp_(-8.0, 8.0)
 
-    output = model(data_dict)
-    proj_feat = proj_head(output.feat)
+        data_dict = {
+            "coord": coord,
+            "feat": input_feat,
+            "grid_coord": grid_coord,
+            "grid_size": grid_size_val,
+            "offset": offset,
+            "batch": batch_tensor,
+        }
 
-    return {
-        "coord": raw_coord.cpu(),
-        "proj_feat": proj_feat.cpu(),
-        "input_feat": input_feat.cpu(),
-        "dino_feat": sample["dino_feat"].cpu(),
-        "mask": sample.get("mask", torch.ones_like(feat[:, 0], dtype=torch.bool)).cpu(),
-        "grid_coord": grid_coord.cpu(),
-    }
-
-
-def run_inference(input_dir, output_pth_dir, checkpoint_path, device="cuda"):
-    input_dir = Path(input_dir)
-    output_pth_dir = Path(output_pth_dir)
-    output_pth_dir.mkdir(exist_ok=True, parents=True)
-
-    # Must match training input_dim
-    model = PointTransformerV3(in_channels=6).to(device)
-    proj_head = torch.nn.Sequential(
-        torch.nn.Linear(64, 128),
-        torch.nn.ReLU(),
-        torch.nn.Linear(128, 384)
-    ).to(device)
-
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint["model"])
-    proj_head.load_state_dict(checkpoint["proj_head"])
-    model.eval()
-    proj_head.eval()
-
-    all_files = sorted(input_dir.glob("*.pth"))
-    print(f"Found {len(all_files)} preprocessed .pth files.")
-
-    for file_path in tqdm(all_files, desc="Running inference"):
-        try:
-            data = infer_one_file(model, proj_head, file_path, device)
-            out_path = output_pth_dir / f"{file_path.stem}.pth"
-            torch.save(data, out_path)
-        except Exception as e:
-            print(f"[ERROR] Failed on {file_path.name}: {e}")
+        output = model(data_dict)
+        feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4).clamp_(-20, 20)
+   
+        # Split and save per sample
+        file_stems = batch["file_stems"]
+        B = len(file_stems)
+        for b in range(B):
+            idx_b = (batch_tensor == b).nonzero(as_tuple=False).squeeze(1)
+            payload = {
+                "file_stem": file_stems[b],
+                "ptv3_feat": feats.index_select(0, idx_b).detach().cpu(),   # (Nb,64)
+                "coord":      coord.index_select(0, idx_b).detach().cpu(),  # normalized coords used in model
+                "grid_coord": grid_coord.index_select(0, idx_b).detach().cpu(),
+                "mask":       batch["mask"].index_select(0, idx_b.cpu()).cpu() if batch["mask"].numel() else torch.empty((0,), dtype=torch.bool),
+                "grid_size":  torch.tensor(grid_size_val),
+            }
             
+            save_path = out_dir / f"{file_stems[b]}_inference.pth"
+            torch.save(payload, save_path)
+
+        # Cleanup
+        del coord, feat, grid_coord, batch_tensor, offset, input_feat, output, feats
+
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    print("[inference] Done.")
+
+
 if __name__ == "__main__":
-    input_dir = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
-    output_dir = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
-    checkpoint_path = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
-    run_inference(input_dir, output_dir, checkpoint_path)
+  
+    DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
+    CHECKPOINTS_DIR = Path(os.getenv("TRAIN_CHECKPOINTS"))
+    CHECKPOINT_PATH = CHECKPOINTS_DIR / "latest_checkpoint.pth"
+    OUT_DIR = Path(os.getenv("INFERENCE_OUTPUT_DIR"))
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    run_inference(
+        data_dir=DATA_DIR,
+        checkpoint_path=CHECKPOINT_PATH,
+        out_dir=OUT_DIR,
+        voxel_size=0.10,
+        multiscale_voxel=False,
+        batch_size=4,
+        workers=12,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        use_data_parallel=False,
+    )

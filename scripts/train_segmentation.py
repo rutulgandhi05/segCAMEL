@@ -1,6 +1,7 @@
 import os
 import math
 from pathlib import Path
+from matplotlib.pylab import sample
 from tqdm import tqdm
 from typing import Optional, Tuple
 from functools import partial
@@ -51,17 +52,21 @@ class PointCloudDataset(torch.utils.data.Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
-        sample = torch.load(self.files[idx])
+        f = self.files[idx]
+        sample = torch.load(f)
         gsize = self.voxel_size if self.voxel_size is not None else float(sample["grid_size"])
         grid_coord = safe_grid_coord(sample["coord"], gsize)
-        return {
+        out = {
             "coord": sample["coord"],               # (N,3) float32
             "feat": sample["feat"],                 # (N,F) float32
-            "dino_feat": sample["dino_feat"],       # (N,D) float32 or float16
             "mask": sample["mask"],                 # (N,) bool/uint8
             "grid_size": torch.tensor(float(gsize)),       # scalar
             "grid_coord": grid_coord,               # (N,3) int32
+            "file_stem": f.stem,
         }
+        if "dino_feat" in sample:
+                out["dino_feat"] = sample["dino_feat"]
+        return out
 
 
 def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
@@ -140,22 +145,25 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
     collated = {
         "coord": [],
         "feat": [],
-        "dino_feat": [],
         "grid_size": [],
         "grid_coord": [],
         "mask": [],
         "batch": [],
         "offset": [],
+        "file_stems": [],
     }
+    has_dino_feat = "dino_feat" in batch[0]
+    if has_dino_feat:
+        collated["dino_feat"] = []
 
     offset = 0
     for batch_id, sample in enumerate(batch):
         coord = sample["coord"]
         feat = sample["feat"]
-        dino = sample["dino_feat"]
         grid = sample["grid_coord"]
         mask = sample["mask"]
         gsize = float(sample["grid_size"])
+        stem = sample["file_stem"] 
 
         if multiscale_voxel:
             sel = _multiscale_voxel_select(coord, grid_sizes=(0.05, 0.10, 0.20), r_bins=(30.0, 70.0))
@@ -165,32 +173,31 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         if sel.numel() > 0:
             coord = coord.index_select(0, sel)
             feat  = feat.index_select(0, sel)
-            dino  = dino.index_select(0, sel)
             grid  = grid.index_select(0, sel)
             mask  = mask.index_select(0, sel)
+            if has_dino_feat:
+                dino = sample["dino_feat"].index_select(0, sel)
         else:
             # entire sample empty after voxelization
             continue
 
-
-
         N = coord.shape[0]
-        if N == 0:
-            # Skip empty sample altogether
-            continue
-
         collated["coord"].append(coord)
         collated["feat"].append(feat)
-        collated["dino_feat"].append(dino)
         collated["grid_coord"].append(grid)
         collated["mask"].append(mask)
         collated["grid_size"].append(gsize)
+        collated["file_stems"].append(stem)
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
+        if has_dino_feat:
+            collated["dino_feat"].append(dino)
 
-    for k in ["coord", "feat", "dino_feat", "mask", "batch", "grid_coord"]:
+    for k in ["coord", "feat", "mask", "batch", "grid_coord"]:
         collated[k] = torch.cat(collated[k], dim=0)
+    if has_dino_feat:
+        collated["dino_feat"] = torch.cat(collated["dino_feat"], dim=0)
     collated["grid_size"] = torch.tensor(collated["grid_size"])
     collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
     return collated
