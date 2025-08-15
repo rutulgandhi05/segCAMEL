@@ -62,7 +62,8 @@ class PointCloudDataset(torch.utils.data.Dataset):
             "mask": sample["mask"],                 # (N,) bool/uint8
             "grid_size": torch.tensor(float(gsize)),       # scalar
             "grid_coord": grid_coord,               # (N,3) int32
-            "file_stem": f.stem,
+            "lidar_stem": f.stem,
+            "image_stem": Path(sample["image_relpath"]).stem
         }
         if "dino_feat" in sample:
                 out["dino_feat"] = sample["dino_feat"]
@@ -150,7 +151,8 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         "mask": [],
         "batch": [],
         "offset": [],
-        "file_stems": [],
+        "lidar_stems": [],
+        "image_stems": [],
     }
     has_dino_feat = "dino_feat" in batch[0]
     if has_dino_feat:
@@ -163,7 +165,8 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         grid = sample["grid_coord"]
         mask = sample["mask"]
         gsize = float(sample["grid_size"])
-        stem = sample["file_stem"] 
+        lidar_stem = sample["lidar_stem"]
+        image_stem = Path(sample["image_relpath"]).stem
 
         if multiscale_voxel:
             sel = _multiscale_voxel_select(coord, grid_sizes=(0.05, 0.10, 0.20), r_bins=(30.0, 70.0))
@@ -187,7 +190,8 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         collated["grid_coord"].append(grid)
         collated["mask"].append(mask)
         collated["grid_size"].append(gsize)
-        collated["file_stems"].append(stem)
+        collated["lidar_stems"].append(lidar_stem)
+        collated["image_stems"].append(image_stem)
         collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
@@ -282,7 +286,7 @@ def train(
     print(f"Loaded {len(dataset)} preprocessed samples")
     print(f"Per-step batch size: {batch_size} | Accum steps: {accum_steps} | "
           f"Effective batch: {batch_size * accum_steps}")
-    print(f"Epochs: {epochs} | Batches/epoch: {num_batches} | Updates/epoch: {updates_per_epoch}")
+    print(f"Epochs: {epochs} | Batches/epoch: {num_batches} | Updates/epoch: {updates_per_epoch} | Total Steps: {epochs * updates_per_epoch}")
     if multiscale_voxel:
         print("Multi-scale voxelization: ON (near=5cm, mid=10cm, far=20cm)")
     else:

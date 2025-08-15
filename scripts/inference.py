@@ -106,25 +106,27 @@ def run_inference(
         feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4).clamp_(-20, 20)
    
         # Split and save per sample
-        file_stems = batch["file_stems"]
-        B = len(file_stems)
+        lidar_stems = batch["lidar_stems"]
+        image_stems = batch["image_stems"]
+        B = len(lidar_stems)
         for b in range(B):
             idx_b = (batch_tensor == b).nonzero(as_tuple=False).squeeze(1)
             payload = {
-                "file_stem": file_stems[b],
+                "lidar_stem": lidar_stems[b],
                 "ptv3_feat": feats.index_select(0, idx_b).detach().cpu(),   # (Nb,64)
                 "coord_norm": coord.index_select(0, idx_b).detach().cpu(),  # normalized coords used in model
                 "coord_raw": batch["coord"].index_select(0, idx_b.cpu()).clone(),
                 "grid_coord": grid_coord.index_select(0, idx_b).detach().cpu(),
                 "mask": batch["mask"].index_select(0, idx_b.cpu()).cpu() if batch["mask"].numel() else torch.empty((0,), dtype=torch.bool),
                 "grid_size": torch.tensor(grid_size_val),
+                "image_stem": image_stems[b]
             }
-            
-            save_path = out_dir / f"{file_stems[b]}_inference.pth"
+
+            save_path = out_dir / f"{image_stems[b]}_inference.pth"
             torch.save(payload, save_path)
 
         # Cleanup
-        del coord, feat, grid_coord, batch_tensor, offset, input_feat, output, feats
+        del coord, feat, grid_coord, batch_tensor, offset, input_feat, output, feats, image_stems, lidar_stems, payload
 
     if device.type == "cuda":
         torch.cuda.empty_cache()

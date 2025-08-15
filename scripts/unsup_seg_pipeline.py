@@ -69,7 +69,7 @@ def extract_features(
         for f in _iter_inference_dumps(infer_dir):
             payload = _load_dump(f)
             yield {
-                "file_stem": payload["file_stem"],
+                "file_stem": payload["image_stem"],
                 "feat64": payload["ptv3_feat"],     # already 64-D backbone features
                 "coord_norm": payload["coord_norm"],          # normalized coords (as in model)
                 "coord_raw": payload["coord_raw"],
