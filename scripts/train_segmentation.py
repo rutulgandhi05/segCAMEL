@@ -166,7 +166,7 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         mask = sample["mask"]
         gsize = float(sample["grid_size"])
         lidar_stem = sample["lidar_stem"]
-        image_stem = Path(sample["image_relpath"]).stem
+        image_stem = sample["image_stem"]
 
         if multiscale_voxel:
             sel = _multiscale_voxel_select(coord, grid_sizes=(0.05, 0.10, 0.20), r_bins=(30.0, 70.0))
