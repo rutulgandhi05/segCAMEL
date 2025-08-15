@@ -4,13 +4,14 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 # Utilities
 def _iter_inference_dumps(infer_dir: Path) -> Iterable[Path]:
     """Yield per-sample *_inference.pth files in a stable order."""
     infer_dir = Path(infer_dir)
-    files = sorted(infer_dir.glob("*_inference.pth"))
+    files = sorted(infer_dir.glob("*_inference.pth"))[:100]
     if not files:
         raise FileNotFoundError(f"No *_inference.pth files found in {infer_dir}")
     for f in files:
@@ -55,7 +56,8 @@ def extract_features(
     Yields dictionaries with:
       - file_stem: str
       - feat64: (N,64) float32    (student backbone features)
-      - coord: (N,3) float32      (normalized coords used by the model)
+      - coord_norm: (N,3) float32      (normalized coords used by the model)
+      - coord_raw: (N,3) float32      (raw coords used by the model)
       - grid_coord: (N,3) int32
       - mask: (N,) bool
       - grid_size: float
@@ -66,7 +68,8 @@ def extract_features(
             yield {
                 "file_stem": payload["file_stem"],
                 "feat64": payload["ptv3_feat"],     # already 64-D backbone features
-                "coord": payload["coord"],          # normalized coords (as in model)
+                "coord_norm": payload["coord"],          # normalized coords (as in model)
+                "coord_raw": payload["coord_raw"],
                 "grid_coord": payload["grid_coord"],
                 "mask": payload["mask"],
                 "grid_size": float(payload["grid_size"].item()) if torch.is_tensor(payload["grid_size"]) else float(payload["grid_size"]),
@@ -97,7 +100,7 @@ def learn_prototypes_from_dataset(
     # Warm-start centroids from first pass
     centroids = None
     buf, seen = [], 0
-    for item in extract_features(infer_dir, return_iter=True):
+    for item in tqdm(extract_features(infer_dir, return_iter=False), desc="Extracting features"):
         X = item["feat64"]
         if X.numel() == 0:
             continue
@@ -229,7 +232,7 @@ def segment_dataset(
     C = F.normalize(centroids.to(torch.float32), dim=1)
     results: Dict[str, np.ndarray] = {}
 
-    for item in extract_features(infer_dir, return_iter=True):
+    for item in tqdm(extract_features(infer_dir, return_iter=False), desc="Segmenting dataset"):
         stem = item["file_stem"]
         Z = item["feat64"]  # (N,64)
         if Z.numel() == 0:

@@ -113,10 +113,11 @@ def run_inference(
             payload = {
                 "file_stem": file_stems[b],
                 "ptv3_feat": feats.index_select(0, idx_b).detach().cpu(),   # (Nb,64)
-                "coord":      coord.index_select(0, idx_b).detach().cpu(),  # normalized coords used in model
+                "coord_norm": coord.index_select(0, idx_b).detach().cpu(),  # normalized coords used in model
+                "coord_raw": batch["coord"].index_select(0, idx_b.cpu()).clone(),
                 "grid_coord": grid_coord.index_select(0, idx_b).detach().cpu(),
-                "mask":       batch["mask"].index_select(0, idx_b.cpu()).cpu() if batch["mask"].numel() else torch.empty((0,), dtype=torch.bool),
-                "grid_size":  torch.tensor(grid_size_val),
+                "mask": batch["mask"].index_select(0, idx_b.cpu()).cpu() if batch["mask"].numel() else torch.empty((0,), dtype=torch.bool),
+                "grid_size": torch.tensor(grid_size_val),
             }
             
             save_path = out_dir / f"{file_stems[b]}_inference.pth"

@@ -20,8 +20,8 @@ import numpy as np
 import torch
 
 # ---- Adjust these constants ----
-INFER_DIR = Path("/path/to/inference_out")   # folder containing *_inference.pth
-OUT_DIR   = Path("./unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
+INFER_DIR = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/inference_output")   # folder containing *_inference.pth
+OUT_DIR   = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
 K = 20                                       # number of clusters (try 10–40 for highway scenes)
 SMOOTH_ITERS = 1                             # 0=off, 1–2 recommended
 NEIGHBOR_RANGE = 1                           # 3x3x3 voxel neighborhood
@@ -158,8 +158,8 @@ def main():
         min_component=MIN_COMPONENT,
     )
     # Save label arrays for reuse
-    for stem, labels in results.items():
-        np.save(OUT_DIR / f"{stem}_labels.npy", labels)
+    #for stem, labels in results.items():
+    #    np.save(OUT_DIR / f"{stem}_labels.npy", labels)
 
     # 3) Export PLYs (+ Open3D snapshot/visualize)
     print("[one-shot] Exporting PLYs...")
@@ -172,11 +172,11 @@ def main():
         if stem not in results:
             continue
         labels = results[stem]
-        coord = item["coord"].cpu().numpy().astype(np.float32)  # NOTE: normalized coords
+        coord = item["coord_raw"].cpu().numpy().astype(np.float32)  # NOTE: raw coords
         colors = _labels_to_colors(labels, palette)
 
         ply_path = ply_dir / f"{stem}.ply"
-        _save_ply(ply_path, coord, colors)
+        #_save_ply(ply_path, coord, colors)
 
         if _HAS_O3D and (DO_OPEN3D_VIEW or SAVE_PNG):
             png_path = (png_dir / f"{stem}.png") if SAVE_PNG else None
@@ -185,7 +185,8 @@ def main():
         exported += 1
         if PLY_LIMIT is not None and exported >= int(PLY_LIMIT):
             break
-
+        
+        
     print(f"[one-shot] Done. Prototypes + labels + PLYs saved under: {OUT_DIR}")
 
 
