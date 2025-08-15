@@ -547,7 +547,7 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
-        epochs=20,
+        epochs=30,
         workers=12,
         batch_size=4,
         accum_steps=8,

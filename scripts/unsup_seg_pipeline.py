@@ -23,7 +23,8 @@ def _load_dump(path: Path) -> Dict[str, torch.Tensor]:
     Load a single inference dump produced by scripts/inference.py.
     Expected keys:
       - ptv3_feat: (N,64) float32
-      - coord: (N,3) float32  (NOTE: normalized coords used by the model)
+      - coord_norm: (N,3) float32
+      - coord_raw: (N,3) float32
       - grid_coord: (N,3) int32
       - mask: (N,) bool
       - grid_size: scalar tensor (float)
@@ -35,8 +36,10 @@ def _load_dump(path: Path) -> Dict[str, torch.Tensor]:
     # ensure dtypes
     if payload["ptv3_feat"].dtype != torch.float32:
         payload["ptv3_feat"] = payload["ptv3_feat"].float()
-    if payload["coord"].dtype != torch.float32:
-        payload["coord"] = payload["coord"].float()
+    if payload["coord_norm"].dtype != torch.float32:
+        payload["coord_norm"] = payload["coord_norm"].float()
+    if payload["coord_raw"].dtype != torch.float32:
+        payload["coord_raw"] = payload["coord_raw"].float()
     if payload["grid_coord"].dtype != torch.int32:
         payload["grid_coord"] = payload["grid_coord"].to(torch.int32)
     if payload["mask"].dtype != torch.bool:
@@ -68,7 +71,7 @@ def extract_features(
             yield {
                 "file_stem": payload["file_stem"],
                 "feat64": payload["ptv3_feat"],     # already 64-D backbone features
-                "coord_norm": payload["coord"],          # normalized coords (as in model)
+                "coord_norm": payload["coord_norm"],          # normalized coords (as in model)
                 "coord_raw": payload["coord_raw"],
                 "grid_coord": payload["grid_coord"],
                 "mask": payload["mask"],

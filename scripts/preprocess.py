@@ -216,8 +216,8 @@ if __name__ == "__main__":
     save_dir = Path(str(save_dir))
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    #folders = [ "Library_01_Day", "Sports_complex_01_Day"] #"Mountain_01_Day",
-    folders = [ "Sports_complex_03_Day"] #inference only
+    folders = [ "Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
+    #folders = [ "Sports_complex_03_Day"] #inference only
 
     counter = 0
     for folder in folders:
@@ -228,7 +228,7 @@ if __name__ == "__main__":
             root_dir=root_dir,
             save_dir=save_dir,
             workers=None,
-            batch_size=16,     
+            batch_size=8,     
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=counter 
         )
