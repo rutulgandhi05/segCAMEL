@@ -23,9 +23,9 @@ import torch
 INFER_DIR = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/inference_output")   # folder containing *_inference.pth
 OUT_DIR   = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
 K = 20                                       # number of clusters (try 10–40 for highway scenes)
-SMOOTH_ITERS = 1                             # 0=off, 1–2 recommended
+SMOOTH_ITERS = 2                             # 0=off, 1–2 recommended
 NEIGHBOR_RANGE = 1                           # 3x3x3 voxel neighborhood
-MIN_COMPONENT = 50                           # snap tiny blobs to neighbor mode
+MIN_COMPONENT = 150                           # snap tiny blobs to neighbor mode
 PLY_LIMIT = None                             # set to an int to only export first N PLYs; None = all
 DO_OPEN3D_VIEW = True                        # interactive viewer (if available)
 SAVE_PNG = True                              # save PNG snapshot with Open3D (if available)
