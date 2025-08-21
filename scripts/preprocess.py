@@ -61,7 +61,12 @@ def preprocess_and_save_hercules(
     workers: int = None,
     batch_size: int = 16,
     prefetch_factor: int = 4,
-    frame_counter: int = 0
+    frame_counter: int = 0,
+    *,
+    # Projector knobs (safe defaults):
+    bilinear: bool = False,          # bilinear sampling on the token lattice
+    occlusion_eps: float = 0.05,     # >0 enables front-most filtering per token (meters in camera Z)
+    save_uv: bool = False           # save per-point projected (u,v) for debugging
 ):
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
@@ -141,21 +146,42 @@ def preprocess_and_save_hercules(
 
             K = intrs[b].to(device).to(torch.float32)
             T = extrs[b].to(device).to(torch.float32)
-            in_size = input_sizes[b]
-            fm_size = fmap_sizes[b]
+            img_w, img_h = input_sizes[b]                  # (W,H) after TF resize
 
-            patch_feats = lf_flat[b].tensor.squeeze(0)  # (HW, D) bf16
-            patch_feats = patch_feats.to(torch.float32)
+            # Derive feature-map size directly from LocalFeatures metadata to avoid W/H swap:
+            # LocalFeatures stores (h,w)
+            Hf = int(getattr(lf_flat, "h", fmap_sizes[b][1] if len(fmap_sizes[b]) == 2 else 0))
+            Wf = int(getattr(lf_flat, "w", fmap_sizes[b][0] if len(fmap_sizes[b]) == 2 else 0))
+            fm_size = (Wf, Hf)
+
+            # Flattened per-sample patch features (Hf*Wf, D) -> float32
+            patch_feats_flat = lf_flat[b].tensor.squeeze(0).to(torch.float32)  # (Hf*Wf, D)
+
 
             # project & assign
             projector = LidarToImageProjector(
                 intrinsic=K,
                 extrinsic=T,
-                image_size=in_size,
+                image_size=(img_w, img_h),
                 feature_map_size=fm_size,
-                patch_features=patch_feats
+                patch_features=patch_feats_flat,  # accepts (Hf*Wf, D) or (Hf,Wf,D)
             )
-            dino_feat, vis_mask = projector.assign_features(xyz.to(torch.float32))
+            point_feats, vis_mask = projector.assign_features(
+                lidar_xyz=xyz.to(torch.float32),
+                bilinear=bilinear,
+                occlusion_eps=occlusion_eps,
+            )
+
+            if frame_counter % 50 == 0:
+                cov = float(vis_mask.float().mean().item()) * 100.0
+                print(f"[PREPROC] visible points: {cov:.2f}%")
+
+            # Optional: save projected (u,v) for debugging/overlays
+            uv_payload = None
+            if save_uv:
+                uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                uv_payload = uvs.detach().cpu()
+
 
 
             lid_ts = int(stamps[b][0]) if stamps is not None else frame_counter
@@ -164,22 +190,30 @@ def preprocess_and_save_hercules(
             payload = {
                 "coord": xyz.float().cpu(),               # (N,3)
                 "feat": feats.float().cpu(),              # (N,F)
-                "dino_feat": dino_feat.half().cpu(),     # (N,D)  (switch to .half() if you want smaller files)
-                "mask": vis_mask.cpu(),                   # (N,)
+                "dino_feat": point_feats.half().cpu(),    # (N,D) save fp16 to cut storage
+                "mask": vis_mask.cpu(),                   # (N,) True where Z>0 & in-image (& occlusion-kept)
                 "grid_size": torch.tensor(GRID_SIZE),     # scalar
-                # tiny viz metadata
+                # light metadata for future debugging
                 "intrinsics": K.cpu(),
                 "extrinsics": T.cpu(),
-                "input_size": in_size,
-                "feature_map_size": fm_size,
+                "input_size": (int(img_w), int(img_h)),
+                "feature_map_size": (int(Wf), int(Hf)),
                 "timestamps": stamps[b] if stamps is not None else None,
                 "image_relpath": rels[b] if rels is not None else None,
                 "used_camera": cams[b] if cams is not None else None,
             }
 
+            if save_uv and uv_payload is not None:
+                payload["proj_uv"] = uv_payload  # (N,2)
+
             assert "image_tensor" not in payload
             save_queue.put((out_path, payload))
             frame_counter += 1
+
+
+        del images_b, local_feats, lf_flat
+        if device == "cuda":
+            torch.cuda.empty_cache()
 
     # --- end of main loop ---
     # wait for all writes to finish
@@ -230,7 +264,10 @@ if __name__ == "__main__":
             workers=None,
             batch_size=8,     
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
-            frame_counter=counter 
+            frame_counter=counter,
+            bilinear=False,
+            occlusion_eps=0.05,     # set e.g. 0.05–0.10 to enable front-most filtering per token
+            save_uv=False, 
         )
 
     print(f"[PREPROC] Total frames processed: {counter}")

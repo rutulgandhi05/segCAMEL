@@ -188,7 +188,7 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
         collated["coord"].append(coord)
         collated["feat"].append(feat)
         collated["grid_coord"].append(grid)
-        collated["mask"].append(mask)
+        collated["mask"].append(mask if mask.dtype == torch.bool else mask.to(torch.bool))
         collated["grid_size"].append(gsize)
         collated["lidar_stems"].append(lidar_stem)
         collated["image_stems"].append(image_stem)

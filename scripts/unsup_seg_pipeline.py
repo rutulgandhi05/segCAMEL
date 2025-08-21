@@ -11,7 +11,7 @@ from tqdm import tqdm
 def _iter_inference_dumps(infer_dir: Path) -> Iterable[Path]:
     """Yield per-sample *_inference.pth files in a stable order."""
     infer_dir = Path(infer_dir)
-    files = sorted(infer_dir.glob("*_inference.pth"))[:100]
+    files = sorted(infer_dir.glob("*_inference.pth"))
     if not files:
         raise FileNotFoundError(f"No *_inference.pth files found in {infer_dir}")
     for f in files:
@@ -103,7 +103,7 @@ def learn_prototypes_from_dataset(
     # Warm-start centroids from first pass
     centroids = None
     buf, seen = [], 0
-    for item in tqdm(extract_features(infer_dir, return_iter=False), desc="Extracting features"):
+    for item in extract_features(infer_dir, return_iter=False):
         X = item["feat64"]
         if X.numel() == 0:
             continue
@@ -122,7 +122,7 @@ def learn_prototypes_from_dataset(
         centroids = F.normalize(X0[torch.randperm(X0.shape[0])[:k]].clone(), dim=1)
 
     # Mini-batch updates over multiple passes
-    for _ in range(max_passes):
+    for _ in tqdm(range(max_passes), desc="Learning prototypes"):
         accum = torch.zeros_like(centroids)
         counts = torch.zeros((k,), dtype=torch.long)
         for item in extract_features(infer_dir, return_iter=True):

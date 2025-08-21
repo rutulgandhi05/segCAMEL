@@ -20,9 +20,9 @@ import numpy as np
 import torch
 
 # ---- Adjust these constants ----
-INFER_DIR = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/inference_output")   # folder containing *_inference.pth
-OUT_DIR   = Path("data/14082025_0250_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
-K = 20                                       # number of clusters (try 10–40 for highway scenes)
+INFER_DIR = Path("data/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/inference_output")   # folder containing *_inference.pth
+OUT_DIR   = Path("data/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
+K = 10                                       # number of clusters (try 10–40 for highway scenes)
 SMOOTH_ITERS = 2                             # 0=off, 1–2 recommended
 NEIGHBOR_RANGE = 1                           # 3x3x3 voxel neighborhood
 MIN_COMPONENT = 150                           # snap tiny blobs to neighbor mode

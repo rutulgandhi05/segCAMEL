@@ -36,7 +36,7 @@ class ScantinelDataset(Dataset):
 
 class HerculesDataset(Dataset):
     def __init__(self, root_dir, transform_factory=None, max_workers=None,
-                 use_right_image=True, return_all_fields=True):
+                 use_right_image=True,  random_if_both=False, return_all_fields=True):
         """
         PyTorch Dataset wrapper for Hercules FMCW LiDAR + Camera data.
 
@@ -52,6 +52,7 @@ class HerculesDataset(Dataset):
         self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=return_all_fields, max_workers=max_workers)
         self.transform_factory = transform_factory
         self.use_right_image = use_right_image
+        self.random_if_both = random_if_both
 
     def __len__(self):
         return len(self.samples)
@@ -65,6 +66,8 @@ class HerculesDataset(Dataset):
         right_path = sample.get("right_image")
         left_path = sample.get("left_image")
         used_camera = "right" if self.use_right_image and right_path is not None else "left"
+        if self.random_if_both and (right_path is not None) and (left_path is not None):
+            used_camera = "right" if torch.randint(0, 2, ()).item() == 1 else "left"
         img_path = right_path if (used_camera == "right") else left_path
 
         if img_path is None:
