@@ -5,6 +5,8 @@ from matplotlib.pylab import sample
 from tqdm import tqdm
 from typing import Optional, Tuple
 from functools import partial
+import random
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -250,8 +252,16 @@ def train(
     total_steps=None,
     use_data_parallel=True,
     voxel_size: float = 0.10,  # outdoor default
-    multiscale_voxel: bool = False, 
+    multiscale_voxel: bool = False,
+    feat_mode: str = "rvi" 
 ):
+    # ---- Reproducibility ----
+    torch.use_deterministic_algorithms(False)
+    seed = 42
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+    g = torch.Generator(device="cpu"); g.manual_seed(seed)
+
     device = torch.device(device)
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -277,7 +287,8 @@ def train(
                             persistent_workers=False,
                             prefetch_factor=prefetch_factor,
                             collate_fn=collate_fn,
-                            multiprocessing_context="spawn"
+                            multiprocessing_context="spawn",
+                            generator=g
                             )
 
     num_batches = len(dataloader)
@@ -296,12 +307,18 @@ def train(
         epochs = math.ceil(total_steps / updates_per_epoch)
         print(f"Will train for {epochs} epochs to hit ~{total_steps} optimizer steps.")
 
-    # Infer dims from a probe sample
+    # Infer dims from a probe sample + feat_mode selection
     sample = dataset[0]
-    input_dim = sample["coord"].shape[1] + sample["feat"].shape[1]
+    # Feature-channel selector (assumes feat columns: [reflectivity, velocity, intensity])
+    feat_dim_total = sample["feat"].shape[1]
+    col_map = {"r": 0, "v": 1, "i": 2}
+    if feat_mode == "none":
+        keep_cols = []
+    else:
+        keep_cols = [col_map[c] for c in feat_mode if c in col_map and col_map[c] < feat_dim_total]
+    input_dim = sample["coord"].shape[1] + len(keep_cols)
     dino_dim = sample["dino_feat"].shape[1]
-    print(f"Using input_dim={input_dim}, dino_dim={dino_dim}")
-
+    print(f"Using input_dim={input_dim} (feat_mode='{feat_mode}', keep_cols={keep_cols}), dino_dim={dino_dim}")
 
     model = PointTransformerV3(
         in_channels=input_dim,
@@ -395,10 +412,19 @@ def train(
                 offset = batch["offset"].to(device, non_blocking=True)
                 grid_size_val = batch["grid_size"].mean().item()
 
+                # ---- Feature-channel selection (matches feat_mode used for input_dim) ----
+                cols = {"r": 0, "v": 1, "i": 2}
+                if feat_mode == "none":
+                    feat_sel = torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
+                else:
+                    keep = [cols[c] for c in feat_mode if c in cols and cols[c] < feat.shape[1]]
+                    feat_sel = feat[:, keep] if len(keep) else torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
+
                 # Normalize coord/feat per-batch before concat
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
-                feat = (feat - feat.mean(dim=0)) / (feat.std(dim=0) + 1e-6)
-                input_feat = torch.cat([coord, feat], dim=1)
+                if feat_sel.numel() > 0:
+                    feat_sel = (feat_sel - feat_sel.mean(dim=0)) / (feat_sel.std(dim=0) + 1e-6)
+                input_feat = torch.cat([coord, feat_sel], dim=1)
 
                 if batch_idx == 0:
                     print(f"[Batch 0] input_feat stats: mean={input_feat.mean().item():.4f}, std={input_feat.std().item():.4f}")
@@ -420,8 +446,6 @@ def train(
                     "offset": offset,
                     "batch": batch_tensor,
                 }
-
-                # optimizer.zero_grad(set_to_none=True)
 
                 # with autocast(**autocast_kwargs):
                 output = model(data_dict)
@@ -468,7 +492,7 @@ def train(
                     for var in [
                         "coord","feat","grid_coord","batch_tensor","offset",
                         "input_feat","output","feats","pred_proj",
-                        "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu"
+                        "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu","feat_sel"
                     ]:
                         if var in locals():
                             del locals()[var]
@@ -493,7 +517,7 @@ def train(
                 for var in [
                     "coord","feat","grid_coord","batch_tensor","offset",
                     "input_feat","output","feats","pred_proj",
-                    "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu"
+                    "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu","feat_sel"
                 ]:
                     if var in locals():
                         del locals()[var]
@@ -560,4 +584,5 @@ if __name__ == "__main__":
         use_data_parallel=False,
         voxel_size=0.10,  # 10 cm voxel size
         multiscale_voxel=False,
+        feat_mode="rvi",
     )

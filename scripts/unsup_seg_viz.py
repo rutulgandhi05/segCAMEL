@@ -21,16 +21,17 @@ import torch
 
 # ---- Adjust these constants ----
 INFER_DIR = Path("data/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/inference_output")   # folder containing *_inference.pth
-OUT_DIR   = Path("data/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")          # where to save prototypes, labels, PLYs, PNGs
+OUT_DIR   = Path("data/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")      # where to save prototypes, labels, PLYs, PNGs
 K = 10                                       # number of clusters (try 10–40 for highway scenes)
 SMOOTH_ITERS = 2                             # 0=off, 1–2 recommended
 NEIGHBOR_RANGE = 1                           # 3x3x3 voxel neighborhood
-MIN_COMPONENT = 150                           # snap tiny blobs to neighbor mode
+MIN_COMPONENT = 150                          # snap tiny blobs to neighbor mode
 PLY_LIMIT = None                             # set to an int to only export first N PLYs; None = all
 DO_OPEN3D_VIEW = True                        # interactive viewer (if available)
 SAVE_PNG = True                              # save PNG snapshot with Open3D (if available)
 PNG_W = 1600                                 # snapshot width
 PNG_H = 1200                                 # snapshot height
+METRICS_CSV = OUT_DIR / f"metrics_k{K}.csv"
 # --------------------------------
 
 # Import pipeline pieces (no redundancy)
@@ -38,6 +39,7 @@ from scripts.unsup_seg_pipeline import (
     extract_features,
     learn_prototypes_from_dataset,
     segment_dataset,
+    evaluate_dataset_metrics,   # NEW
 )
 
 # ---------- Open3D (optional) ----------
@@ -157,9 +159,22 @@ def main():
         neighbor_range=NEIGHBOR_RANGE,
         min_component=MIN_COMPONENT,
     )
-    # Save label arrays for reuse
-    #for stem, labels in results.items():
-    #    np.save(OUT_DIR / f"{stem}_labels.npy", labels)
+    # Optionally save per-frame label arrays
+    # for stem, labels in results.items():
+    #     np.save(OUT_DIR / f"{stem}_labels.npy", labels)
+
+    # 2.5) NEW — Compute and save dataset-level metrics
+    print("[one-shot] Computing metrics...")
+    evaluate_dataset_metrics(
+        INFER_DIR,
+        labels_per_frame=results,
+        out_csv=METRICS_CSV,
+        sample_n=200_000,
+        seed=42,
+        q_bins=4,
+        tau_list=[0.2, 0.4, 0.6],
+        tau_policy="quantile",
+    )
 
     # 3) Export PLYs (+ Open3D snapshot/visualize)
     print("[one-shot] Exporting PLYs...")
@@ -176,7 +191,7 @@ def main():
         colors = _labels_to_colors(labels, palette)
 
         ply_path = ply_dir / f"{stem}.ply"
-        #_save_ply(ply_path, coord, colors)
+        # _save_ply(ply_path, coord, colors)
 
         if _HAS_O3D and (DO_OPEN3D_VIEW or SAVE_PNG):
             png_path = (png_dir / f"{stem}.png") if SAVE_PNG else None
@@ -185,9 +200,8 @@ def main():
         exported += 1
         if PLY_LIMIT is not None and exported >= int(PLY_LIMIT):
             break
-        
-        
-    print(f"[one-shot] Done. Prototypes + labels + PLYs saved under: {OUT_DIR}")
+
+    print(f"[one-shot] Done. Prototypes + labels + metrics (+ PLY/PNG if enabled) under: {OUT_DIR}")
 
 
 if __name__ == "__main__":

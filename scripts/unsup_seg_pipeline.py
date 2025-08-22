@@ -6,6 +6,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from scripts.metrics import compute_all_metrics, MetricsConfig
+
 
 # Utilities
 def _iter_inference_dumps(infer_dir: Path) -> Iterable[Path]:
@@ -28,11 +30,13 @@ def _load_dump(path: Path) -> Dict[str, torch.Tensor]:
       - grid_coord: (N,3) int32
       - mask: (N,) bool
       - grid_size: scalar tensor (float)
-      - file_stem: may be absent; derive from filename if needed
+      - image_stem: str
+      - speed: (N,) float32  [optional, if saved by inference]
     """
     payload = torch.load(path, map_location="cpu")
-    if "file_stem" not in payload:
-        payload["file_stem"] = path.stem.replace("_inference", "")
+    if "image_stem" not in payload:
+        # backward-compat
+        payload["image_stem"] = path.stem.replace("_inference", "")
     # ensure dtypes
     if payload["ptv3_feat"].dtype != torch.float32:
         payload["ptv3_feat"] = payload["ptv3_feat"].float()
@@ -44,6 +48,12 @@ def _load_dump(path: Path) -> Dict[str, torch.Tensor]:
         payload["grid_coord"] = payload["grid_coord"].to(torch.int32)
     if payload["mask"].dtype != torch.bool:
         payload["mask"] = payload["mask"].to(torch.bool)
+    # optional speed
+    if "speed" in payload and payload["speed"] is not None:
+        if payload["speed"].numel() and payload["speed"].dtype != torch.float32:
+            payload["speed"] = payload["speed"].float()
+    else:
+        payload["speed"] = torch.empty((0,), dtype=torch.float32)
     return payload
 
 
@@ -64,6 +74,7 @@ def extract_features(
       - grid_coord: (N,3) int32
       - mask: (N,) bool
       - grid_size: float
+      - speed: (N,) float32 (optional; empty if not available)
     """
     def _stream():
         for f in _iter_inference_dumps(infer_dir):
@@ -76,14 +87,13 @@ def extract_features(
                 "grid_coord": payload["grid_coord"],
                 "mask": payload["mask"],
                 "grid_size": float(payload["grid_size"].item()) if torch.is_tensor(payload["grid_size"]) else float(payload["grid_size"]),
+                "speed": payload.get("speed", torch.empty((0,), dtype=torch.float32)),
             }
 
     return _stream() if return_iter else list(_stream())
 
 
-# -----------------------------------------------------------------------------
 # 2) Spherical mini-batch K-Means (cosine) over the feature stream
-# -----------------------------------------------------------------------------
 @torch.no_grad()
 def learn_prototypes_from_dataset(
     infer_dir: Path,
@@ -289,3 +299,74 @@ def save_colorized_ply(
         for i in range(xyz.shape[0]):
             r, g, b = int(rgb[i, 0]), int(rgb[i, 1]), int(rgb[i, 2])
             f.write(f"{xyz[i,0]:.6f} {xyz[i,1]:.6f} {xyz[i,2]:.6f} {r} {g} {b}\n")
+
+
+# 6) NEW: Metrics evaluation over the whole dataset
+def evaluate_dataset_metrics(
+    infer_dir: Path,
+    labels_per_frame: Dict[str, np.ndarray],
+    out_csv: Path,
+    *,
+    sample_n: int = 200_000,
+    seed: int = 42,
+    q_bins: int = 4,
+    tau_list: Optional[List[float]] = None,       # defaults to [0.2,0.4,0.6] (quantiles)
+    tau_policy: str = "quantile",
+) -> Dict[str, Optional[float]]:
+    """
+    Aggregates features/labels (and optional speeds & visibility) across all frames,
+    computes metrics via scripts.metrics.compute_all_metrics, and writes a CSV.
+
+    Returns the metrics dict as well.
+    """
+    feats_all, labels_all, speeds_all, vis_all = [], [], [], []
+
+    # Iterate inference dumps in a stable order
+    for f in _iter_inference_dumps(infer_dir):
+        payload = _load_dump(f)
+        stem = payload["image_stem"]
+        if stem not in labels_per_frame:
+            continue
+
+        lbl = labels_per_frame[stem]
+        N_dump = payload["ptv3_feat"].shape[0]
+        if len(lbl) != N_dump:
+            # Mismatch should not happen if labels were produced from the same dumps
+            raise ValueError(f"Label length mismatch for {stem}: labels={len(lbl)} vs dump={N_dump}")
+
+        feats_all.append(payload["ptv3_feat"])
+        labels_all.append(torch.as_tensor(lbl, dtype=torch.int64))
+        # Optional speed & mask
+        if "speed" in payload and payload["speed"].numel():
+            speeds_all.append(payload["speed"])
+        else:
+            # Keep shapes aligned; if missing, skip later
+            speeds_all.append(torch.empty((0,), dtype=torch.float32))
+        vis_all.append(payload["mask"].to(torch.bool) if payload["mask"].numel() else torch.zeros(N_dump, dtype=torch.bool))
+
+    if not feats_all:
+        raise RuntimeError("No features found to evaluate metrics.")
+
+    X = torch.cat(feats_all, dim=0).numpy()
+    Y = torch.cat(labels_all, dim=0).numpy()
+    M = torch.cat(vis_all, dim=0).numpy()
+    V = None
+    # If at least one frame had speed data and all frames concatenated match a non-zero size
+    if any(s.numel() for s in speeds_all):
+        # For frames without speeds we appended empty tensors; concat only non-empty
+        speeds_nonempty = [s for s in speeds_all if s.numel()]
+        if speeds_nonempty:
+            V = torch.cat(speeds_nonempty, dim=0).numpy()
+
+    cfg = MetricsConfig(sample_n=sample_n, seed=seed, q_bins=q_bins, tau_list=tau_list, tau_policy=tau_policy)
+    results = compute_all_metrics(X, Y, speeds=V, visible_mask=M, token_labels_proj=None, cfg=cfg)
+
+    # Write CSV
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_csv, "w") as w:
+        w.write("metric,value\n")
+        for k, v in results.items():
+            w.write(f"{k},{'' if v is None else v}\n")
+
+    print(f"[metrics] wrote {out_csv}")
+    return results
