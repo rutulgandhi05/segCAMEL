@@ -23,10 +23,10 @@ export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/inference_output
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_DATASET/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
  
 python -m scripts.preprocess
 python -m scripts.inference
 
-mkdir -p $HERCULES_DATASET/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
-cp -r --verbose $INFERENCE_OUTPUT_DIR/ $HERCULES_DATASET/16082025_0231_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
+mkdir -p $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
+cp -r --verbose $INFERENCE_OUTPUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
