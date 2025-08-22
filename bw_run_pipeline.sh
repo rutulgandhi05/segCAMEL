@@ -18,6 +18,7 @@ module load devel/cuda/12.8
 export HERCULES_DATASET=$(ws_find hercules_dataset)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
+export PIPELINE_MODE="preprocess"
 
 mkdir -p $PREPROCESS_OUTPUT_DIR
 mkdir -p $TRAIN_CHECKPOINTS

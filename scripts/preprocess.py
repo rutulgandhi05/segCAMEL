@@ -241,6 +241,7 @@ def preprocess_and_save_hercules(
 if __name__ == "__main__":
     data_root = os.getenv("HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
+    pipeline_mode = os.getenv("PIPELINE_MODE")  # default to "inference"
     if not data_root:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     if not save_dir:
@@ -250,8 +251,10 @@ if __name__ == "__main__":
     save_dir = Path(str(save_dir))
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    #folders = [ "Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
-    folders = [ "Sports_complex_03_Day"] #inference only
+    if pipeline_mode == "inference":
+        folders = [ "Sports_complex_03_Day"] #inference only
+    elif pipeline_mode == "preprocess":
+        folders = [ "Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
 
     counter = 0
     for folder in folders:

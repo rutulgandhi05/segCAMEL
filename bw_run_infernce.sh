@@ -20,6 +20,7 @@ export HERCULES_DATASET=$(ws_find hercules_dataset)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/inference_output
+export PIPELINE_MODE="inference"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
