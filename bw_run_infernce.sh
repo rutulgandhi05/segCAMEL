@@ -21,6 +21,7 @@ export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/inference_output
 export PIPELINE_MODE="inference"
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/unsup_outputs
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
@@ -28,6 +29,7 @@ cp --verbose $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1
  
 python -m scripts.preprocess
 python -m scripts.inference
+python -m scripts.unsup_seg_viz
 
-mkdir -p $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
-cp -r --verbose $INFERENCE_OUTPUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/inference_output_bm_sd3
+mkdir -p $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs
