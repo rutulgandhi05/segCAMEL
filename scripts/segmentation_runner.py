@@ -54,7 +54,7 @@ USE_FP16_ASSIGN   = True
 SAVE_PER_FILE     = False
 # Also/alternatively: write labels directly into a single ZIP (resume-friendly with append).
 USE_ZIP           = True
-ZIP_MODE          = "a"          # "w" to overwrite, "a" to append/resume
+ZIP_MODE          = "w"          # "w" to overwrite, "a" to append/resume
 ZIP_SKIP_EXISTING = True         # when appending, skip entries already present
 
 # Optional feature augmentation (kept off by default for DITR-aligned runs)
