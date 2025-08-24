@@ -97,6 +97,7 @@ def run_inference(
     else:
         _load_state(model, ckpt)
 
+    total_files = 0
     for batch in tqdm(loader, desc="Inference"):
 
         # Move tensors
@@ -162,10 +163,12 @@ def run_inference(
 
             save_path = out_dir / f"{image_stems[b]}_inference.pth"
             torch.save(payload, save_path)
+            total_files += 1
 
         # Cleanup
         del coord, feat, grid_coord, batch_tensor, offset, input_feat, output, feats, image_stems, lidar_stems, payload, feat_raw_cpu, speed_all, has_vel, idx_b, idx_b_cpu
 
+    print(f"[inference] Saved inference outputs for {total_files} samples to: {out_dir}")
     if device.type == "cuda":
         torch.cuda.empty_cache()
     print("[inference] Done.")

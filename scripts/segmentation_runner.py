@@ -59,7 +59,7 @@ ZIP_SKIP_EXISTING = True         # when appending, skip entries already present
 
 # Optional feature augmentation (kept off by default for DITR-aligned runs)
 FEATURE_CFG = {
-    "use_range":  False,  "range_scale": 60.0,
+    "use_range":  False,  "range_scale": 150.0,
     "use_height": False,  "height_scale": 6.0,
     "use_speed":  False,  "speed_scale": 25.0,
 }

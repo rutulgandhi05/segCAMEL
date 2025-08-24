@@ -30,4 +30,5 @@ cp --verbose $HERCULES_DATASET/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1
 python -m scripts.preprocess
 python -m scripts.segmentation_runner
 
+zip -v -r  $INFERENCE_OUTPUT_DIR.zip $SEGMENTATION_OUT_DIR
 cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/
