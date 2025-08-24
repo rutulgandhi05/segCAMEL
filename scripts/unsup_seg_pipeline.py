@@ -94,16 +94,7 @@ def load_run_config(path: Path) -> Dict:
 
 # ----------------------- Feature construction (aug) ---------------------- #
 
-def _build_features(
-    item: Dict[str, torch.Tensor],
-    feature_cfg: Optional[Dict] = None,
-) -> torch.Tensor:
-    """
-    Build clustering features.
-    - Always includes 64-D backbone features.
-    - Optionally concatenates: range (meters), height z (meters), |v| speed (m/s).
-      Each extra channel is scaled so magnitudes are comparable to unit-normed 64-D.
-    """
+def _build_features(item: Dict[str, torch.Tensor], feature_cfg: Optional[Dict] = None) -> torch.Tensor:
     if feature_cfg is None:
         feature_cfg = {}
     X = item["feat64"]
@@ -124,9 +115,7 @@ def _build_features(
             s = (s / float(feature_cfg.get("speed_scale", 30.0))).unsqueeze(1).to(torch.float32)
             comps.append(s)
 
-    if len(comps) == 1:  # no aug
-        return X
-    return torch.cat(comps, dim=1)
+    return X if len(comps) == 1 else torch.cat(comps, dim=1)
 
 
 # ------------------ Distance helpers (stratified sampling) --------------- #
@@ -184,134 +173,13 @@ def _stratified_subsample(
     return X.index_select(0, idx_keep)
 
 
-# ------------------ K-means (cosine) prototype learning ------------------ #
-
-@torch.no_grad()
-def learn_prototypes_from_dataset(
-    infer_dir: Path,
-    *,
-    k: int = 20,
-    max_passes: int = 2,
-    sample_per_frame: int = 20000,
-    seed: int = 0,
-    use_visible_for_prototypes: bool = True,
-    invisible_weight: float = 1.0,  # only if use_visible_for_prototypes=False
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    update_chunk: int = 1_000_000,
-    # optional:
-    feature_cfg: Optional[Dict] = None,
-    dist_edges: Optional[List[float]] = None,
-    dist_ratios: Optional[List[float]] = None,
-    # speed:
-    prefetch_buffer: int = 2,
-    use_fp16: Optional[bool] = None,
-) -> torch.Tensor:
-    """
-    Learn K unit-norm prototypes with optional feature augmentation and distance-stratified subsampling.
-    Speed-ups:
-      - I/O prefetching
-      - FP16 matmul for assignment on CUDA (updates remain in FP32)
-    """
-    torch.manual_seed(seed)
-    rng = np.random.default_rng(seed)
-    dev = torch.device(device)
-    if use_fp16 is None:
-        use_fp16 = (dev.type == "cuda")
-
-    if dev.type == "cuda":
-        try:
-            torch.set_float32_matmul_precision("high")  # allow TF32 on Ampere+
-        except Exception:
-            pass
-
-    if feature_cfg is None:
-        feature_cfg = {}
-    if dist_edges is None:
-        dist_edges = [0.0, 20.0, 40.0]
-    if dist_ratios is None:
-        dist_ratios = [0.5, 0.35, 0.15]
-
-    # ---- Seed ----
-    centroids = None
-    buf, seen = [], 0
-    stream = _prefetch(extract_features(infer_dir, return_iter=True), buf=prefetch_buffer)
-    for item in tqdm(stream, desc="Seeding prototypes"):
-        X0 = _build_features(item, feature_cfg)
-        M = item["mask"]
-        filt = M if (use_visible_for_prototypes and M.numel()) else None
-        Xs = _stratified_subsample(X0, item["coord_raw"], sample_per_frame, dist_ratios, dist_edges, rng, filt)
-        if Xs.numel() == 0:
-            continue
-        Xs = F.normalize(Xs, dim=1)
-        buf.append(Xs); seen += Xs.shape[0]
-        if seen >= k * 50:
-            Xcat = torch.cat(buf, dim=0)
-            centroids = F.normalize(Xcat[torch.randperm(Xcat.shape[0])[:k]].clone(), dim=1).to(dev)
-            break
-    if centroids is None:
-        Xcat = torch.cat(buf, dim=0) if buf else torch.randn(k, 64)
-        centroids = F.normalize(Xcat[torch.randperm(Xcat.shape[0])[:k]].clone(), dim=1).to(dev)
-
-    # ---- Passes ----
-    for _ in tqdm(range(max_passes), desc="Learning prototypes"):
-        accum = torch.zeros_like(centroids, device=dev, dtype=torch.float32)
-        counts = torch.zeros((k,), dtype=torch.float32, device=dev)
-
-        stream = _prefetch(extract_features(infer_dir, return_iter=True), buf=prefetch_buffer)
-        for item in stream:
-            X0 = _build_features(item, feature_cfg)
-            M = item["mask"]
-            filt = M if (use_visible_for_prototypes and M.numel()) else None
-            X = _stratified_subsample(X0, item["coord_raw"], sample_per_frame, dist_ratios, dist_edges, rng, filt)
-            if X.numel() == 0:
-                continue
-
-            X = F.normalize(X, dim=1).to(dev, non_blocking=True)
-            # matmul in fp16 if cuda
-            if use_fp16 and dev.type == "cuda":
-                X_mm = X.to(torch.float16)
-                C_mm = centroids.to(torch.float16)
-            else:
-                X_mm = X
-                C_mm = centroids
-
-            for s in range(0, X.shape[0], update_chunk):
-                Xe = X[s:s+update_chunk]
-                Ze = X_mm[s:s+update_chunk]
-                idx = (Ze @ C_mm.T).argmax(dim=1)
-                # accumulate in FP32 for stability
-                accum.index_add_(0, idx, Xe)
-                counts += torch.bincount(idx, minlength=k).to(counts.dtype)
-
-        m = counts > 0
-        centroids[m] = accum[m] / counts[m].unsqueeze(1).clamp(min=1e-6)
-        centroids = F.normalize(centroids, dim=1)
-
-    return centroids.detach().cpu()
-
-
-# ----------------------- Helper: soft assignment ------------------------- #
-
-def _soft_assign(sim: torch.Tensor, tau: float = 15.0):
-    logits = sim * float(tau)
-    probs = torch.softmax(logits, dim=1)
-    conf, _ = probs.max(dim=1)
-    return probs, conf
-
-
-# ---- build once per call: neighbor caches used by smoothing iterations --- #
+# ----------------------- Neighbor cache (for smoothing) ------------------ #
 
 def _build_voxel_neighbors(
     vox2idx: Dict[int, List[int]],
     vis: Optional[np.ndarray],
     offs: np.ndarray,
-) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray], Dict[int, np.ndarray]]:
-    """
-    Returns three dicts keyed by voxel key:
-      - nbr_all[k]:      np.ndarray of neighbor point indices (all)
-      - nbr_vis[k]:      only visible neighbor point indices
-      - nbr_invis[k]:    only invisible neighbor point indices
-    """
+):
     nbr_all, nbr_vis, nbr_invis = {}, {}, {}
     for k, idxs in vox2idx.items():
         x = (k >> 42) & ((1 << 21) - 1)
@@ -319,31 +187,24 @@ def _build_voxel_neighbors(
         z =  k        & ((1 << 21) - 1)
         neigh_keys = ((x + offs[:, 0]) << 42) + ((y + offs[:, 1]) << 21) + (z + offs[:, 2])
 
-        all_list = []
-        vis_list = []
-        inv_list = []
+        all_list, vis_list, inv_list = [], [], []
         for nk in neigh_keys:
             js = vox2idx.get(int(nk))
-            if not js:
-                continue
+            if not js: continue
             js_arr = np.asarray(js, dtype=np.int64)
             all_list.append(js_arr)
-            if vis is not None:
-                if js_arr.size:
-                    m = vis[js_arr]
-                    if m.any():  vis_list.append(js_arr[m])
-                    inv = ~m
-                    if inv.any(): inv_list.append(js_arr[inv])
-        if all_list:
-            nbr_all[k] = np.concatenate(all_list, axis=0)
-        else:
-            nbr_all[k] = np.empty((0,), dtype=np.int64)
+            if vis is not None and js_arr.size:
+                m = vis[js_arr]
+                if m.any():  vis_list.append(js_arr[m])
+                inv = ~m
+                if inv.any(): inv_list.append(js_arr[inv])
 
+        nbr_all[k]   = np.concatenate(all_list, axis=0) if all_list else np.empty((0,), dtype=np.int64)
         if vis is None:
-            nbr_vis[k] = nbr_all[k]
+            nbr_vis[k]   = nbr_all[k]
             nbr_invis[k] = np.empty((0,), dtype=np.int64)
         else:
-            nbr_vis[k] = np.concatenate(vis_list, axis=0) if vis_list else np.empty((0,), dtype=np.int64)
+            nbr_vis[k]   = np.concatenate(vis_list, axis=0) if vis_list else np.empty((0,), dtype=np.int64)
             nbr_invis[k] = np.concatenate(inv_list, axis=0) if inv_list else np.empty((0,), dtype=np.int64)
     return nbr_all, nbr_vis, nbr_invis
 
@@ -359,12 +220,8 @@ def smooth_labels_voxel(
     visible_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
     vis_vote_mode: str = "one_way",  # "off" | "strict" | "one_way"
     region_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
+    early_stop_tol: float = 0.0,     # break if < tol fraction changed; 0 keeps old behaviour
 ) -> np.ndarray:
-    """
-    Visibility-aware voxel smoothing with cached neighbor lists (2–5x faster than naive loop).
-      - "one_way": visible points only take votes from visible; invisible can take votes from all.
-    region_mask: if set, only update indices where region_mask==True (neighbors outside can still vote).
-    """
     if grid_coord.numel() == 0 or labels.size == 0 or iters <= 0:
         return labels
 
@@ -378,21 +235,18 @@ def smooth_labels_voxel(
     for i, k in enumerate(key):
         vox2idx[int(k)].append(i)
 
-    # neighbor offsets
     offs = np.array([(dx, dy, dz)
                      for dx in range(-neighbor_range, neighbor_range + 1)
                      for dy in range(-neighbor_range, neighbor_range + 1)
                      for dz in range(-neighbor_range, neighbor_range + 1)], dtype=np.int64)
 
-    # Build neighbor caches once
     nbr_all, nbr_vis, nbr_invis = _build_voxel_neighbors(vox2idx, vis, offs)
-    L = int(lbl.max()) + 1  # label space (small K), used by bincount
+    L = int(lbl.max()) + 1
 
     for _ in range(iters):
         new_lbl = lbl.copy()
         for k, idxs in vox2idx.items():
-            if not idxs:
-                continue
+            if not idxs: continue
             idxs_np = np.asarray(idxs, dtype=np.int64)
             if reg is not None:
                 idxs_np = idxs_np[reg[idxs_np]]
@@ -401,47 +255,42 @@ def smooth_labels_voxel(
 
             if vis is None or vis_vote_mode == "off":
                 nb = nbr_all[k]
-                if reg is not None and nb.size:
-                    nb = nb[reg[nb]]
+                if reg is not None and nb.size: nb = nb[reg[nb]]
                 if nb.size:
-                    counts = np.bincount(lbl[nb], minlength=L)
-                    mode = int(counts.argmax())
+                    mode = int(np.bincount(lbl[nb], minlength=L).argmax())
                     new_lbl[idxs_np] = mode
                 continue
 
-            # Visibility-aware
             idxs_vis_true  = idxs_np[vis[idxs_np]]
             idxs_vis_false = idxs_np[~vis[idxs_np]]
 
             if idxs_vis_true.size:
                 nbv = nbr_vis[k]
-                if reg is not None and nbv.size:
-                    nbv = nbv[reg[nbv]]
+                if reg is not None and nbv.size: nbv = nbv[reg[nbv]]
                 if nbv.size:
-                    counts = np.bincount(lbl[nbv], minlength=L)
-                    new_lbl[idxs_vis_true] = int(counts.argmax())
+                    new_lbl[idxs_vis_true] = int(np.bincount(lbl[nbv], minlength=L).argmax())
 
             if idxs_vis_false.size:
                 if vis_vote_mode == "strict":
                     nbi = nbr_invis[k]
-                    if reg is not None and nbi.size:
-                        nbi = nbi[reg[nbi]]
+                    if reg is not None and nbi.size: nbi = nbi[reg[nbi]]
                 else:
                     nbi = nbr_all[k]
-                    if reg is not None and nbi.size:
-                        nbi = nbi[reg[nbi]]
+                    if reg is not None and nbi.size: nbi = nbi[reg[nbi]]
                 if nbi.size:
-                    counts = np.bincount(lbl[nbi], minlength=L)
-                    new_lbl[idxs_vis_false] = int(counts.argmax())
+                    new_lbl[idxs_vis_false] = int(np.bincount(lbl[nbi], minlength=L).argmax())
 
+        if early_stop_tol > 0.0:
+            changed = (new_lbl != lbl).sum()
+            if changed / max(1, lbl.size) < float(early_stop_tol):
+                lbl = new_lbl
+                break
         lbl = new_lbl
 
-    # Snap tiny components (global)
     if min_component > 0:
         counts = defaultdict(int)
         lv = list(zip(lbl.tolist(), key.tolist()))
-        for pair in lv:
-            counts[pair] += 1
+        for pair in lv: counts[pair] += 1
         small = {pair for pair, c in counts.items() if c < min_component}
         if small:
             for i, pair in enumerate(lv):
@@ -503,6 +352,25 @@ def _fill_low_conf_by_neighbors(grid_coord: torch.Tensor, labels: np.ndarray, lo
     return new_lbl
 
 
+# ----------------------- helper: auto chunk sizing ----------------------- #
+
+def _auto_assign_chunk(n_points: int, d_feat: int, k: int, device: torch.device, use_fp16: bool) -> int:
+    """
+    Estimate a good chunk size from available VRAM. Conservative target uses ~50% of free mem.
+    """
+    if device.type != "cuda":
+        return min(n_points, 3_000_000)
+    try:
+        free, total = torch.cuda.mem_get_info(device.index or 0)
+        # bytes per point ≈ input + sim row; for fp16 ~ (d + k) * 2B, fp32 ~ (d + k) * 4B; add 20% headroom
+        bpp = (d_feat + k) * (2 if use_fp16 else 4)
+        target = int(0.5 * free)  # use half of free
+        chunk = max(200_000, min(n_points, int(target / (bpp * 1.2))))
+        return chunk
+    except Exception:
+        return min(n_points, 3_000_000)
+
+
 # ---------- Segmentation (nearest prototype + optional smoothing) --------- #
 
 @torch.no_grad()
@@ -535,13 +403,17 @@ def segment_dataset(
     # speed:
     prefetch_buffer: int = 2,
     use_fp16: Optional[bool] = None,
-) -> Union[Dict[str, np.ndarray], Tuple[Dict[str, List[torch.Tensor]], Dict[str, List[torch.Tensor]]]]:
+    auto_chunk: bool = True,
+) -> Union[Dict[str, np.ndarray], Tuple[Dict[str, np.ndarray], Dict[str, List[torch.Tensor]]]]:
     """
     Segment dataset and optionally save per-frame label files.
     Speed-ups:
       - I/O prefetching
-      - FP16 matmul on CUDA (argmax in half; confidence via float32 softmax)
-      - cached neighbor lists for smoothing
+      - Single matmul reused for argmax + confidence (no duplicate compute)
+      - FP16 matmul on CUDA (softmax/confidence in FP32)
+      - Cached neighbor lists for smoothing
+      - Early-stop smoothing when labels stop changing
+      - Auto chunk sizing to match VRAM
     """
     if feature_cfg is None:
         feature_cfg = {}
@@ -555,9 +427,10 @@ def segment_dataset(
     dev = torch.device(device)
     if use_fp16 is None:
         use_fp16 = (dev.type == "cuda")
+
     if dev.type == "cuda":
         try:
-            torch.set_float32_matmul_precision("high")
+            torch.set_float32_matmul_precision("high")  # allow TF32
         except Exception:
             pass
 
@@ -583,30 +456,32 @@ def segment_dataset(
             results[stem] = lbl
             continue
 
-        Z_norm = F.normalize(Z0, dim=1)
-        N = Z_norm.shape[0]
+        # Normalize on CPU, then pin for faster H2D copy
+        Z_norm = F.normalize(Z0, dim=1).pin_memory() if dev.type == "cuda" else F.normalize(Z0, dim=1)
+        N, D = Z_norm.shape
         idx_hard = np.empty((N,), dtype=np.int64)
         low_conf_mask = np.zeros((N,), dtype=bool)
 
-        for s in range(0, N, assign_chunk):
-            Ze_f32 = Z_norm[s:s+assign_chunk].to(dev, non_blocking=True)
+        # Auto-size the chunk for this frame
+        achunk = _auto_assign_chunk(N, D, C.shape[0], dev, use_fp16) if auto_chunk else assign_chunk
+        chunk = min(assign_chunk, achunk)
+
+        for s in range(0, N, chunk):
+            Ze_f32 = Z_norm[s:s+chunk].to(dev, non_blocking=True)
             Ze_mm  = Ze_f32.to(torch.float16) if (use_fp16 and dev.type == "cuda") else Ze_f32
-            sim = Ze_mm @ C_mm.T
-            idx = sim.argmax(dim=1).detach().cpu().numpy().astype(np.int64)
+            sim    = Ze_mm @ C_mm.T                       # single matmul
+            idx    = sim.argmax(dim=1).detach().cpu().numpy().astype(np.int64)
             idx_hard[s:s+idx.shape[0]] = idx
 
             if soft_assign:
-                # compute confidence in float32 for stability
-                sim32 = (Ze_f32 @ C.T)
-                _, conf = _soft_assign(sim32, tau=float(tau))
-                conf_np = conf.detach().cpu().numpy()
+                # exact same confidence as before, computed from the SAME sim (cast to fp32)
+                conf = torch.softmax(sim.float() * float(tau), dim=1).amax(dim=1).detach().cpu().numpy()
                 if item["mask"].numel():
                     vis_np = item["mask"].cpu().numpy()
-                    lo = conf_np < float(conf_th)
-                    slice_idx = np.arange(s, s+conf_np.shape[0])
-                    low_conf_mask[slice_idx[vis_np[slice_idx]]] |= lo[vis_np[slice_idx]]
+                    slice_idx = np.arange(s, s+conf.shape[0])
+                    low_conf_mask[slice_idx[vis_np[slice_idx]]] |= (conf[vis_np[slice_idx]] < float(conf_th))
                 else:
-                    low_conf_mask[s:s+conf_np.shape[0]] |= (conf_np < float(conf_th))
+                    low_conf_mask[s:s+conf.shape[0]] |= (conf < float(conf_th))
 
         idx = idx_hard.copy()
 
@@ -616,6 +491,7 @@ def segment_dataset(
             vis_np = item["mask"].cpu().numpy() if item["mask"].numel() else np.zeros_like(out_mask, dtype=bool)
             low_conf_mask[vis_np] |= out_mask[vis_np]
 
+        # Adaptive smoothing with early stop
         if smoothing_iters > 0 and adaptive_smoothing:
             for b, bm in enumerate(bin_masks):
                 idx = smooth_labels_voxel(
@@ -627,6 +503,7 @@ def segment_dataset(
                     visible_mask=(item["mask"] if vis_aware_smooth else None),
                     vis_vote_mode=("one_way" if vis_aware_smooth else "off"),
                     region_mask=bm.cpu().numpy(),
+                    early_stop_tol=0.0001,  # stop if <0.01% change
                 )
         elif smoothing_iters > 0:
             idx = smooth_labels_voxel(
@@ -637,6 +514,7 @@ def segment_dataset(
                 min_component=min_component,
                 visible_mask=(item["mask"] if vis_aware_smooth else None),
                 vis_vote_mode=("one_way" if vis_aware_smooth else "off"),
+                early_stop_tol=0.0001,
             )
 
         if low_conf_mask.any():
@@ -656,7 +534,7 @@ def segment_dataset(
             per_frame_hook(stem, item["coord_raw"].cpu().numpy().astype(np.float32), idx)
 
         if collect_metrics and accum is not None:
-            accum["feats"].append(item["feat64"])  # keep 64-D baseline for metrics comparability
+            accum["feats"].append(item["feat64"])
             accum["labels"].append(torch.as_tensor(idx, dtype=torch.int64))
             accum["mask"].append(item["mask"])
             accum["speeds"].append(item.get("speed", torch.empty((0,), dtype=torch.float32)))
