@@ -252,7 +252,7 @@ if __name__ == "__main__":
     save_dir.mkdir(parents=True, exist_ok=True)
 
     if pipeline_mode == "inference":
-        folders = [ "Sports_complex_03_Day"] #inference only
+        folders = [ "Sports_complex_03_Day", "Library_03_Day"] #inference only
     elif pipeline_mode == "preprocess":
         folders = [ "Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
 

@@ -77,7 +77,7 @@ from scripts.unsup_seg_pipeline import (
 
 # optional inference hook (only used if RUN_INFERENCE=True)
 try:
-    import inference as _inference_mod
+    import scripts.inference as _inference_mod
     _HAS_INFER = True
 except Exception:
     _inference_mod = None
