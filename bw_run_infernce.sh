@@ -28,8 +28,6 @@ mkdir -p $INFERENCE_OUTPUT_DIR
 cp --verbose $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
  
 python -m scripts.preprocess
-python -m scripts.inference
-python -m scripts.unsup_seg_viz
+python -m scripts.segmentation_runner
 
-mkdir -p $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs
-cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/
