@@ -25,9 +25,9 @@ export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/unsup_outputs
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
- 
+cp --verbose $HERCULES_DATASET/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+
 python -m scripts.preprocess
 python -m scripts.segmentation_runner
 
-cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/22082025_0443_segcamel_train_with_vel_md1_ld1_sd1/
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_DATASET/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/
