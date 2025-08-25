@@ -77,7 +77,7 @@ except Exception:
 
 # Optional inference hook
 try:
-    import inference as _inference_mod
+    import scripts.inference as _inference_mod
     _HAS_INFER = True
 except Exception:
     _inference_mod = None
