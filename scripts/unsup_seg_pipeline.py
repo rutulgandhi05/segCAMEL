@@ -68,6 +68,11 @@ class DumpDataset(Dataset):
             "speed":      p.get("speed", torch.empty((0,), dtype=torch.float32)),
         }
 
+# --- top-level collate (picklable; replaces lambda) ---
+def _collate_keep(batch):
+    # DataLoader will hand us a list[dict]; we want to yield those dicts one by one.
+    return batch
+
 def _make_loader(
     infer_dir: Path,
     *,
@@ -85,7 +90,7 @@ def _make_loader(
         pin_memory=bool(pin_memory),
         persistent_workers=(workers > 0),
         prefetch_factor=max(2, int(prefetch)) if workers > 0 else None,
-        collate_fn=lambda batch: batch,  # keep list[dict]
+        collate_fn=_collate_keep,  # <-- no lambda; picklable
     )
 
 # ------------------------------------------------------------------------ #
@@ -323,7 +328,7 @@ def smooth_labels_voxel(
     lbl = labels.copy()
 
     # pack 3D indices into 64-bit key (21 bits per axis)
-    key = (g[:, 0] << 42) + (g[:, 1] << 21) + g[:, 2]
+    key = (g[:, 0] << 42) + (g[:, 1] << 21) + (g[:, 2])
     vox2idx: Dict[int, List[int]] = defaultdict(list)
     for i, k in enumerate(key):
         vox2idx[int(k)].append(i)
