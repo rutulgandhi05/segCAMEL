@@ -70,7 +70,7 @@ class DumpDataset(Dataset):
 
 # --- top-level collate (picklable; replaces lambda) ---
 def _collate_keep(batch):
-    # DataLoader will hand us a list[dict]; we want to yield those dicts one by one.
+    # DataLoader gives list[dict]; we keep it as-is and iterate inner dicts.
     return batch
 
 def _make_loader(
@@ -90,7 +90,7 @@ def _make_loader(
         pin_memory=bool(pin_memory),
         persistent_workers=(workers > 0),
         prefetch_factor=max(2, int(prefetch)) if workers > 0 else None,
-        collate_fn=_collate_keep,  # <-- no lambda; picklable
+        collate_fn=_collate_keep,
     )
 
 # ------------------------------------------------------------------------ #
@@ -144,11 +144,20 @@ def _build_features(item: Dict[str, torch.Tensor], feature_cfg: Optional[Dict] =
 # ------------------------------------------------------------------------ #
 
 def _distance_bins(coord_raw: torch.Tensor, edges: List[float]) -> List[torch.Tensor]:
+    """
+    Produce len(edges) bins:
+      [0, edges[1]), [edges[1], edges[2]), ..., [edges[-1], inf)
+    Special-cases:
+      - edges == []  -> 1 bin: [0, inf)
+      - edges == [e] -> 1 bin: [0, inf)
+    """
     r = torch.linalg.norm(coord_raw, dim=1)
+    if edges is None or len(edges) <= 1:
+        return [(r >= 0.0)]
     masks = []
-    for i, _ in enumerate(edges):
+    for i in range(len(edges)):
         if i == 0:
-            lo, hi = 0.0, edges[1] if len(edges) > 1 else float("inf")
+            lo, hi = 0.0, edges[1]
         elif i < len(edges) - 1:
             lo, hi = edges[i], edges[i+1]
         else:
@@ -156,12 +165,35 @@ def _distance_bins(coord_raw: torch.Tensor, edges: List[float]) -> List[torch.Te
         masks.append((r >= lo) & (r < hi))
     return masks
 
+def _align_ratios_to_bins(ratios: Optional[List[float]], bin_count: int) -> np.ndarray:
+    """
+    Ensure ratios length == bin_count, padding with last value or truncating as needed,
+    then renormalize to sum=1. If ratios is None/empty, use uniform.
+    """
+    if bin_count <= 0:
+        return np.array([], dtype=np.float64)
+    if ratios is None or len(ratios) == 0:
+        arr = np.ones(bin_count, dtype=np.float64) / float(bin_count)
+        return arr
+    arr = np.array(ratios, dtype=np.float64)
+    if arr.size < bin_count:
+        pad_val = arr[-1] if arr.size > 0 else 1.0
+        arr = np.pad(arr, (0, bin_count - arr.size), mode="constant", constant_values=pad_val)
+    elif arr.size > bin_count:
+        arr = arr[:bin_count]
+    s = arr.sum()
+    if s <= 0:
+        arr = np.ones(bin_count, dtype=np.float64) / float(bin_count)
+    else:
+        arr = arr / s
+    return arr
+
 def _stratified_subsample(
     X: torch.Tensor,
     coord_raw: torch.Tensor,
     total_n: int,
-    ratios: List[float],
-    edges: List[float],
+    ratios: Optional[List[float]],
+    edges: Optional[List[float]],
     rng: np.random.Generator,
     mask_filter: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
@@ -169,12 +201,15 @@ def _stratified_subsample(
     if N == 0 or total_n <= 0:
         return X
     valid = mask_filter if (mask_filter is not None and mask_filter.numel() == N) else torch.ones((N,), dtype=torch.bool, device=X.device)
-    bins = [b & valid for b in _distance_bins(coord_raw, edges)]
-    ratios = np.array(ratios, dtype=np.float64)
-    ratios = (ratios / (ratios.sum() if ratios.sum() > 0 else 1.0))
+    bins = [b & valid for b in _distance_bins(coord_raw, edges or [])]
+    bin_count = len(bins)
+    if bin_count == 0:
+        return X
+    ratios_aligned = _align_ratios_to_bins(ratios, bin_count)
+
     idx_keep = []
     for bi, b in enumerate(bins):
-        n_b = int(round(total_n * float(ratios[bi])))
+        n_b = int(round(total_n * float(ratios_aligned[bi])))
         ids = torch.nonzero(b, as_tuple=False).squeeze(1).cpu().numpy()
         if ids.size == 0:
             continue
@@ -193,10 +228,7 @@ def _stratified_subsample(
 # ------------------------------------------------------------------------ #
 
 def _kmeanspp_init(x_unit: torch.Tensor, k: int, dev: torch.device, seed: int) -> torch.Tensor:
-    """
-    K-means++ for cosine k-means. x_unit must be unit-normalized on 'dev'.
-    Returns (k, D) unit-normalized centroids.
-    """
+    """K-means++ for cosine k-means. x_unit must be unit-normalized on 'dev'."""
     assert x_unit.ndim == 2 and x_unit.shape[0] >= k, "Insufficient samples for k-means++ seeding"
     gen = torch.Generator(device=dev).manual_seed(seed)
     i0 = torch.randint(x_unit.shape[0], (1,), generator=gen, device=dev).item()
@@ -219,7 +251,7 @@ def learn_prototypes_from_dataset(
     sample_per_frame: int = 20000,
     seed: int = 0,
     use_visible_for_prototypes: bool = True,
-    invisible_weight: float = 1.0,  # kept for API completeness
+    invisible_weight: float = 1.0,  # API completeness
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     update_chunk: int = 1_000_000,
     feature_cfg: Optional[Dict] = None,
@@ -245,7 +277,7 @@ def learn_prototypes_from_dataset(
 
     if feature_cfg is None: feature_cfg = {}
     if dist_edges is None:  dist_edges = [0.0, 20.0, 40.0]
-    if dist_ratios is None: dist_ratios = [0.5, 0.35, 0.15]
+    # note: dist_ratios can be any length; auto-aligned later
 
     # ---- Seeding (via DL) ----
     centroids = None
