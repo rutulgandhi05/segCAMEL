@@ -175,7 +175,6 @@ def _apply_segmentation(centroids: torch.Tensor):
         zip_labels_path=ZIP_PATH,
         zip_mode="w",
         zip_compress=zipfile.ZIP_DEFLATED,
-        zip_skip_existing=False,
         # quality knobs
         tau_reject=TAU_REJECT,
         noise_label=NOISE_LABEL,
