@@ -46,7 +46,7 @@ def _load_dump(path: Path) -> Dict[str, torch.Tensor]:
 class DumpDataset(Dataset):
     """
     Dataset over inference dumps. Produces dict with:
-      file_stem, feat64, coord_norm, coord_raw, grid_coord, mask, grid_size, speed
+      file_stem (unique), feat64, coord_norm, coord_raw, grid_coord, mask, grid_size, speed
     """
     def __init__(self, infer_dir: Path):
         self.paths = sorted(Path(infer_dir).glob("*_inference.pth"))
@@ -56,9 +56,20 @@ class DumpDataset(Dataset):
     def __len__(self): return len(self.paths)
 
     def __getitem__(self, i: int):
-        p = _load_dump(self.paths[i])
+        path = self.paths[i]
+        p = _load_dump(path)
+
+        # --- build a UNIQUE stem ---
+        stem_from_path = path.stem.replace("_inference", "")
+        img = p.get("image_stem", "")
+        lid = p.get("lidar_stem", "")
+        if isinstance(img, str) and isinstance(lid, str) and img and lid:
+            file_stem = f"{img}__{lid}"
+        else:
+            file_stem = stem_from_path  # unique per file on disk
+
         return {
-            "file_stem":  p["image_stem"],
+            "file_stem":  file_stem,
             "feat64":     p["ptv3_feat"],
             "coord_norm": p["coord_norm"],
             "coord_raw":  p["coord_raw"],
@@ -500,10 +511,12 @@ def segment_dataset(
 
     # Prepare ZIP (optional) — no resume, mode "w" by default
     zf = None
+    written_names = None
     if zip_labels_path is not None:
         zip_labels_path = Path(zip_labels_path)
         zip_labels_path.parent.mkdir(parents=True, exist_ok=True)
         zf = zipfile.ZipFile(zip_labels_path, mode=zip_mode, compression=zip_compress, allowZip64=True)
+        written_names = set()  # guard against accidental duplicates
 
     # Build loader over full set
     loader = _make_loader(
@@ -517,17 +530,12 @@ def segment_dataset(
     try:
         for batch in tqdm(loader, desc="Segmenting + (opt) metrics/export"):
             for item in batch:
-                stem = item["file_stem"]
+                stem = item["file_stem"]  # unique now
 
                 Z0 = _build_features(item, feature_cfg)
                 if Z0.numel() == 0:
-                    lbl = np.empty((0,), dtype=np.int64)
-                    # persist empty if requested
-                    if save_labels_dir is not None:
-                        np.savez_compressed(save_labels_dir / f"{stem}_clusters.npz", labels=lbl.astype(np.int32))
-                    if zf is not None:
-                        zf.writestr(f"{stem}_clusters.npz", _npz_bytes(lbl))
-                    results[stem] = lbl
+                    # Skip writing empties; just record in results to keep accounting.
+                    results[stem] = np.empty((0,), dtype=np.int64)
                     continue
 
                 # Normalize then chunked similarity
@@ -569,7 +577,16 @@ def segment_dataset(
                     np.savez_compressed(save_labels_dir / f"{stem}_clusters.npz", labels=idx_out.astype(np.int32))
 
                 if zf is not None:
-                    zf.writestr(f"{stem}_clusters.npz", _npz_bytes(idx_out))
+                    name = f"{stem}_clusters.npz"
+                    if (written_names is not None) and (name in written_names):
+                        # ultra-defensive: shouldn't trigger now that stem is unique, but keep it safe
+                        k = 2
+                        while f"{stem}__dup{k}_clusters.npz" in written_names:
+                            k += 1
+                        name = f"{stem}__dup{k}_clusters.npz"
+                    zf.writestr(name, _npz_bytes(idx_out))
+                    if written_names is not None:
+                        written_names.add(name)
 
                 results[stem] = idx_out
 

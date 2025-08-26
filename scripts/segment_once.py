@@ -34,7 +34,7 @@ SAMPLE_PER_FRAME  = 50_000
 USE_FP16_MATMUL   = True
 SEED              = 0
 DIST_EDGES        = [0.0, 15.0, 30.0, 60.0]
-DIST_RATIOS       = [0.40, 0.35, 0.25]
+DIST_RATIOS       = [0.40, 0.35, 0.20, 0.05]
 
 # --- Segmentation ---
 SMOOTH_ITERS      = 2
@@ -48,9 +48,9 @@ RANGE_GATE_M      = 1.5       # depth-aware smoothing (meters)
 
 # --- Feature augmentation (better separation) ---
 FEATURE_CFG = {
-    "use_range":  True,  "range_scale": 60.0,
-    "use_height": True,  "height_scale": 6.0,
-    "use_speed":  True,  "speed_scale": 25.0,
+    "use_range":  True,  "range_scale": 100.0,
+    "use_height": True,  "height_scale": 3.0,
+    "use_speed":  True,  "speed_scale": 30.0,
 }
 
 # --- DataLoader I/O knobs ---
@@ -75,17 +75,32 @@ except Exception:
         save_run_config,
     )
 
-# Optional inference hook
+# Optional inference hook: try package path first, then flat path.
+_HAS_INFER = False
+_inference_mod = None
 try:
     import scripts.inference as _inference_mod
     _HAS_INFER = True
 except Exception:
-    _inference_mod = None
-    _HAS_INFER = False
+    try:
+        import inference as _inference_mod
+        _HAS_INFER = True
+    except Exception:
+        _inference_mod = None
+        _HAS_INFER = False
 
 
 def _count_infer_files(infer_dir: Path) -> int:
     return len(list(Path(infer_dir).glob("*_inference.pth")))
+
+def _zip_entries_count(zip_path: Path) -> int:
+    if not zip_path.exists():
+        return 0
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            return len(zf.namelist())
+    except Exception:
+        return 0
 
 def _ensure_dirs():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -184,9 +199,13 @@ def _apply_segmentation(centroids: torch.Tensor):
         dl_prefetch=DL_PREFETCH,
         dl_batch_io=DL_BATCH_IO,
         dl_pin_memory=DL_PIN_MEMORY,
-        # no resume_labels_store
     )
-    print(f"[segment_once] Done in {time.time()-t0:.1f}s; wrote {len(results)} frames to {ZIP_PATH}")
+    proc = len(results)                   # processed frames (incl. empties)
+    written = _zip_entries_count(ZIP_PATH)  # actually saved (non-empty only)
+    skipped = max(0, proc - written)      # empties skipped by the pipeline
+    print(f"[segment_once] Done in {time.time()-t0:.1f}s; "
+          f"processed={proc}, written={written}, skipped_empties={skipped}; "
+          f"zip -> {ZIP_PATH}")
     return accum
 
 def _compute_metrics(accum):
@@ -228,8 +247,8 @@ def main():
 
     print("\n[summary]")
     print(f"  Prototypes: {PROTOS_PATH if PROTOS_PATH.exists() else '(not saved)'}")
-    print(f"  Labels    : {ZIP_PATH} (zip, fresh)")
-    print(f"  Metrics   : {METRICS_CSV}")
+    print(f"  Labels ZIP : {ZIP_PATH}")
+    print(f"  Metrics    : {METRICS_CSV}")
     print("  Done.\n")
 
 if __name__ == "__main__":
