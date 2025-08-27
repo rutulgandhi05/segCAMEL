@@ -293,7 +293,7 @@ def preprocess_and_save_hercules(
 
 
 if __name__ == "__main__":
-    data_root = os.getenv("HERCULES_DATASET")
+    data_root = os.getenv("TMP_HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
     pipeline_mode = os.getenv("PIPELINE_MODE")  # default to "inference"
     if not data_root:
@@ -307,7 +307,7 @@ if __name__ == "__main__":
 
     if pipeline_mode == "inference":
         folders = ["Sports_complex_03_Day"]  # inference only , "Library_03_Day"
-    elif pipeline_mode == "preprocess":
+    elif pipeline_mode == "train":
         folders = ["Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
     else:
         raise ValueError(f"Unknown PIPELINE_MODE={pipeline_mode}")
