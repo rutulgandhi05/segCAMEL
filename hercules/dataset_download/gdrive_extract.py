@@ -183,7 +183,7 @@ def read_links(path: str) -> List[str]:
 def main():
 
     # Resolve output dir
-    out_root = "data/"
+    out_root = os.getenv("HERCULES_DATASET")
     out_root_path = Path(out_root)
     out_root_path.mkdir(parents=True, exist_ok=True)
 
