@@ -2,6 +2,7 @@ import io
 from pathlib import Path
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor
+import tarfile
 
 import numpy as np
 from tqdm import tqdm
@@ -140,6 +141,21 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
         max_workers = _resolve_default_workers()
     # Ensure at least one worker
     max_workers = max(1, int(max_workers))
+
+    lidar_zip = dataset_folder / "Aeva_data" / "LiDAR.tar.gz"
+    if lidar_zip.exists():
+        with tarfile.open(lidar_zip, "r:gz") as tar:
+            tar.extractall(path=dataset_folder / "Aeva_data" / "LiDAR")
+
+    image_left_zip = dataset_folder / "Image" / "stereo_left.tar.gz"
+    if image_left_zip.exists():
+        with tarfile.open(image_left_zip, "r:gz") as tar:
+            tar.extractall(path=dataset_folder / "Image" / "stereo_left")
+
+    image_right_zip = dataset_folder / "Image" / "stereo_right.tar.gz"
+    if image_right_zip.exists():
+        with tarfile.open(image_right_zip, "r:gz") as tar:
+            tar.extractall(path=dataset_folder / "Image" / "stereo_right")
 
     # Paths
     lidar_folder = _first_existing_path(

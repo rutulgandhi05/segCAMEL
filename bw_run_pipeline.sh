@@ -15,7 +15,7 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
-export HERCULES_DATASET=$(ws_find hercules_dataset)
+export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export PIPELINE_MODE="preprocess"
