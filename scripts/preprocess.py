@@ -42,6 +42,7 @@ def _disk_writer(save_queue: Queue):
         finally:
             save_queue.task_done()
 
+
 def _safe_outpath(base_dir: Path, stem: int | str) -> Path:
     p = base_dir / f"{stem}.pth"
     if not p.exists():
@@ -52,6 +53,7 @@ def _safe_outpath(base_dir: Path, stem: int | str) -> Path:
         if not q.exists():
             return q
         k += 1
+
 
 @torch.no_grad()
 def preprocess_and_save_hercules(
@@ -66,8 +68,22 @@ def preprocess_and_save_hercules(
     # Projector knobs (safe defaults):
     bilinear: bool = False,          # bilinear sampling on the token lattice
     occlusion_eps: float = 0.05,     # >0 enables front-most filtering per token (meters in camera Z)
-    save_uv: bool = False           # save per-point projected (u,v) for debugging
+    save_uv: bool = False,           # save per-point projected (u,v) for debugging
+    # NEW: geometry tightening
+    border_margin_px: int = 2,       # drop points that land within N px of the image border
+    range_aware_occl: bool = True,   # make occlusion eps increase with distance
+    occl_eps_per_m: float = 0.001,   # eps ≈ occl_eps_per_m * range (meters)
+    occl_eps_min: float = 0.05,      # clamp lower
+    occl_eps_max: float = 0.20,      # clamp upper
 ):
+    """
+    Extract DINO features for each image, project onto LiDAR points, and save per-frame dumps.
+
+    Updates:
+      • border_margin_px: masks out points whose projection is too close to image edges
+      • range_aware_occl: per-point occlusion epsilon (fallback to scalar if projector
+        does not accept tensor occlusion_eps; in that case we use the median).
+    """
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -80,14 +96,13 @@ def preprocess_and_save_hercules(
     workers = max(1, int(workers))
     print(f"Using {workers} DataLoader workers for preprocessing...")
 
-    
     dataset = HerculesDataset(
         root_dir,
         transform_factory=extractor.transform_factory,
         max_workers=workers,
         use_right_image=True,
         return_all_fields=True
-    ) 
+    )
 
     dataloader = DataLoader(
         dataset,
@@ -122,7 +137,6 @@ def preprocess_and_save_hercules(
         rels = batch.get("image_relpath", None)    # optional
         cams = batch.get("used_camera", None)      # optional
 
-
         if isinstance(imgs, list):
             images_b = torch.stack(imgs, dim=0)
         else:
@@ -136,7 +150,6 @@ def preprocess_and_save_hercules(
 
         B = len(pcs)
         assert lf_flat.tensor.shape[0] == B, "Batch size mismatch between images and extracted features."
-
 
         # process each sample in the batch
         for b in range(B):
@@ -157,7 +170,6 @@ def preprocess_and_save_hercules(
             # Flattened per-sample patch features (Hf*Wf, D) -> float32
             patch_feats_flat = lf_flat[b].tensor.squeeze(0).to(torch.float32)  # (Hf*Wf, D)
 
-
             # project & assign
             projector = LidarToImageProjector(
                 intrinsic=K,
@@ -166,11 +178,50 @@ def preprocess_and_save_hercules(
                 feature_map_size=fm_size,
                 patch_features=patch_feats_flat,  # accepts (Hf*Wf, D) or (Hf,Wf,D)
             )
-            point_feats, vis_mask = projector.assign_features(
-                lidar_xyz=xyz.to(torch.float32),
-                bilinear=bilinear,
-                occlusion_eps=occlusion_eps,
-            )
+
+            # --- NEW: compute per-point, range-aware occlusion eps (with safe fallback) ---
+            if range_aware_occl:
+                r = torch.linalg.norm(xyz.to(torch.float32), dim=1)                  # (N,)
+                eps_vec = torch.clamp(occl_eps_per_m * r, min=occl_eps_min, max=occl_eps_max)
+                try:
+                    point_feats, vis_mask = projector.assign_features(
+                        lidar_xyz=xyz.to(torch.float32),
+                        bilinear=bilinear,
+                        occlusion_eps=eps_vec,   # pass tensor if supported
+                    )
+                except TypeError:
+                    # Fallback: use a robust scalar (median of the per-point eps)
+                    eps_scalar = float(eps_vec.median().item())
+                    point_feats, vis_mask = projector.assign_features(
+                        lidar_xyz=xyz.to(torch.float32),
+                        bilinear=bilinear,
+                        occlusion_eps=eps_scalar,
+                    )
+            else:
+                point_feats, vis_mask = projector.assign_features(
+                    lidar_xyz=xyz.to(torch.float32),
+                    bilinear=bilinear,
+                    occlusion_eps=occlusion_eps,
+                )
+
+            # --- NEW: border margin suppression (drop projections too close to image edges) ---
+            # We apply this as an additional visibility mask AND zero the features there.
+            if border_margin_px and border_margin_px > 0:
+                try:
+                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    u = uvs[:, 0]
+                    v = uvs[:, 1]
+                    in_bounds = (u >= border_margin_px) & (u < (img_w - border_margin_px)) & \
+                                (v >= border_margin_px) & (v < (img_h - border_margin_px))
+                    # combine with projector visibility
+                    vis_mask = vis_mask & in_bounds.to(vis_mask.device)
+                    # zero out features for suppressed points (keeps array sizes aligned)
+                    if point_feats is not None and point_feats.numel() == xyz.shape[0] * point_feats.shape[1]:
+                        point_feats = point_feats.clone()
+                        point_feats[~vis_mask] = 0.0
+                except Exception:
+                    # If projector.project_points is unavailable, just keep vis_mask as-is
+                    pass
 
             if frame_counter % 50 == 0:
                 cov = float(vis_mask.float().mean().item()) * 100.0
@@ -179,10 +230,13 @@ def preprocess_and_save_hercules(
             # Optional: save projected (u,v) for debugging/overlays
             uv_payload = None
             if save_uv:
-                uvs, _, _ = projector.project_points(xyz.to(torch.float32))
-                uv_payload = uvs.detach().cpu()
-
-
+                try:
+                    # Reuse last-computed uvs if available, else compute
+                    if 'uvs' not in locals():
+                        uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    uv_payload = uvs.detach().cpu()
+                except Exception:
+                    uv_payload = None
 
             lid_ts = int(stamps[b][0]) if stamps is not None else frame_counter
             out_path = _safe_outpath(save_dir, lid_ts)
@@ -210,7 +264,7 @@ def preprocess_and_save_hercules(
             save_queue.put((out_path, payload))
             frame_counter += 1
 
-
+        # free per-batch GPU mem
         del images_b, local_feats, lf_flat
         if device == "cuda":
             torch.cuda.empty_cache()
@@ -220,23 +274,23 @@ def preprocess_and_save_hercules(
     save_queue.join()
     save_queue.put(None)
     writer_thread.join()
-    
+
     try:
-        gc.collect() 
+        gc.collect()
         del extractor
-        del dataloader 
+        del dataloader
         del dataset
         torch.cuda.empty_cache()
-
     except Exception:
         pass
     if device == "cuda":
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
-    
+
     dt = (time.time() - t0) / 60.0
     print(f"[PREPROC] Done {root_dir.name}: {frame_counter} total frames ({dt:.1f} min)")
     return frame_counter
+
 
 if __name__ == "__main__":
     data_root = os.getenv("HERCULES_DATASET")
@@ -252,25 +306,33 @@ if __name__ == "__main__":
     save_dir.mkdir(parents=True, exist_ok=True)
 
     if pipeline_mode == "inference":
-        folders = [ "Sports_complex_03_Day"] #inference only , "Library_03_Day"
+        folders = ["Sports_complex_03_Day"]  # inference only , "Library_03_Day"
     elif pipeline_mode == "preprocess":
-        folders = [ "Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
+        folders = ["Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
+    else:
+        raise ValueError(f"Unknown PIPELINE_MODE={pipeline_mode}")
 
     counter = 0
     for folder in folders:
         root_dir = data_root / folder
         print(f"Processing folder: {folder}")
 
-        counter   = preprocess_and_save_hercules(
+        counter = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
             workers=None,
-            batch_size=8,     
+            batch_size=8,
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=counter,
             bilinear=False,
-            occlusion_eps=0.05,     # set e.g. 0.05–0.10 to enable front-most filtering per token
-            save_uv=False, 
+            occlusion_eps=0.05,         # used if range_aware_occl=False or as fallback
+            save_uv=False,
+            # NEW defaults:
+            border_margin_px=2,
+            range_aware_occl=True,
+            occl_eps_per_m=0.001,
+            occl_eps_min=0.05,
+            occl_eps_max=0.20,
         )
 
     print(f"[PREPROC] Total frames processed: {counter}")

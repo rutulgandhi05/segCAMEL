@@ -1,7 +1,6 @@
 import os
 import math
 from pathlib import Path
-from matplotlib.pylab import sample
 from tqdm import tqdm
 from typing import Optional, Tuple
 from functools import partial
@@ -11,10 +10,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.amp import GradScaler, autocast
+from torch.amp import GradScaler
 from models.PTv3.model_ import PointTransformerV3
 from utils.misc import _resolve_default_workers
-
 
 import torch.multiprocessing as mp
 try:
@@ -43,6 +41,7 @@ def safe_grid_coord(coord: torch.Tensor, grid_size, *, origin: Optional[torch.Te
     grid = torch.floor((coord - origin) / (grid_size + 1e-8)).to(torch.int32)
     return grid
 
+
 class PointCloudDataset(torch.utils.data.Dataset):
     def __init__(self, root_dir: Path, voxel_size: float):
         self.files = sorted(list(Path(root_dir).glob("*.pth")))
@@ -55,20 +54,36 @@ class PointCloudDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         f = self.files[idx]
-        sample = torch.load(f)
-        gsize = self.voxel_size if self.voxel_size is not None else float(sample["grid_size"])
-        grid_coord = safe_grid_coord(sample["coord"], gsize)
+        rec = torch.load(f, map_location="cpu")
+
+        coord = rec["coord"]                   # (N,3) float32
+        feat  = rec.get("feat", torch.empty((coord.shape[0], 0), dtype=coord.dtype))
+        mask  = rec.get("mask", torch.ones((coord.shape[0],), dtype=torch.bool))
+        if mask.dtype != torch.bool:
+            mask = mask.to(torch.bool)
+
+        # voxel grid (compute here for robustness, even if present in file)
+        gsize = self.voxel_size if self.voxel_size is not None else float(rec.get("grid_size", 0.1))
+        grid_coord = safe_grid_coord(coord, gsize)
+
+        # robust image stem (may be None or missing)
+        img_rel = rec.get("image_relpath", None)
+        if isinstance(img_rel, (str, Path)) and str(img_rel):
+            image_stem = Path(str(img_rel)).stem
+        else:
+            image_stem = ""
+
         out = {
-            "coord": sample["coord"],               # (N,3) float32
-            "feat": sample["feat"],                 # (N,F) float32
-            "mask": sample["mask"],                 # (N,) bool/uint8
-            "grid_size": torch.tensor(float(gsize)),       # scalar
+            "coord": coord,                         # (N,3) float32
+            "feat": feat,                           # (N,F) float32
+            "mask": mask,                           # (N,) bool
+            "grid_size": torch.tensor(float(gsize)),
             "grid_coord": grid_coord,               # (N,3) int32
             "lidar_stem": f.stem,
-            "image_stem": Path(sample["image_relpath"]).stem
+            "image_stem": image_stem,
         }
-        if "dino_feat" in sample:
-                out["dino_feat"] = sample["dino_feat"]
+        if "dino_feat" in rec:
+            out["dino_feat"] = rec["dino_feat"]     # (N,D) fp16/float32 OK
         return out
 
 
@@ -76,23 +91,17 @@ def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
     """
     Return indices of the FIRST occurrence of each unique 3D voxel row in the ORIGINAL order,
     without using torch.unique(..., return_index=...).
-
-    Works on both CPU/GPU tensors and old/new PyTorch versions.
-    Assumes indices_3d are non-negative (true in our pipeline: grid built from (coord - min)/voxel_size).
+    Assumes indices_3d are non-negative (true for (coord - min)/voxel_size).
     """
     if indices_3d.numel() == 0:
         return torch.empty((0,), dtype=torch.long)
 
     g = indices_3d.to(torch.int64).contiguous()  # (N, 3)
-    # Build a monotonic 1D key per row: key = x*(My*Mz) + y*Mz + z
-    # This avoids lexsort; stays within int64 for realistic voxel ranges.
-    max_vals = g.max(dim=0).values + 1  # (3,)
+    max_vals = g.max(dim=0).values + 1           # (3,)
     max_vals = torch.clamp(max_vals, min=1)
     M_yz = max_vals[1] * max_vals[2]
-
     key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]  # (N,)
 
-    # Stable sort by key, then take the first index of each run of equal keys
     perm = torch.argsort(key, stable=True)
     key_sorted = key[perm]
 
@@ -100,7 +109,7 @@ def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
     first_mask[1:] = key_sorted[1:] != key_sorted[:-1]
 
     first_sorted = perm[first_mask]            # first occurrences in sorted order
-    sel = first_sorted.sort().values           # back to ascending ORIGINAL indices for stable batching
+    sel = first_sorted.sort().values           # back to ascending ORIGINAL indices
     return sel
 
 
@@ -110,7 +119,7 @@ def _multiscale_voxel_select(
     r_bins: Tuple[float, float] = (30.0, 70.0),
 ) -> torch.Tensor:
     """
-    Distance-aware voxel selection (optional):
+    Distance-aware voxel selection:
       - near (<= r_bins[0])    : small voxels (e.g., 5 cm)
       - mid  (r0, <= r_bins[1]): medium voxels (e.g., 10 cm)
       - far  (> r_bins[1])     : large voxels (e.g., 20 cm)
@@ -119,7 +128,6 @@ def _multiscale_voxel_select(
     if coord.numel() == 0:
         return torch.empty((0,), dtype=torch.long)
 
-    # radial distance in XY plane is usually appropriate for LiDAR highway scenes
     r_xy = torch.linalg.norm(coord[:, :2], dim=1)
 
     near_mask = r_xy <= r_bins[0]
@@ -127,7 +135,6 @@ def _multiscale_voxel_select(
     far_mask  = r_xy > r_bins[1]
 
     sels = []
-
     for mask, gsize in zip((near_mask, mid_mask, far_mask), grid_sizes):
         if mask.any():
             sub_idx = mask.nonzero(as_tuple=False).squeeze(1)
@@ -140,21 +147,13 @@ def _multiscale_voxel_select(
         return torch.empty((0,), dtype=torch.long)
 
     sel = torch.cat(sels, dim=0)
-    # Keep order ascending for stable batching
     return sel.sort().values
 
 
 def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
     collated = {
-        "coord": [],
-        "feat": [],
-        "grid_size": [],
-        "grid_coord": [],
-        "mask": [],
-        "batch": [],
-        "offset": [],
-        "lidar_stems": [],
-        "image_stems": [],
+        "coord": [], "feat": [], "grid_size": [], "grid_coord": [],
+        "mask": [], "batch": [], "offset": [], "lidar_stems": [], "image_stems": [],
     }
     has_dino_feat = "dino_feat" in batch[0]
     if has_dino_feat:
@@ -183,7 +182,6 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
             if has_dino_feat:
                 dino = sample["dino_feat"].index_select(0, sel)
         else:
-            # entire sample empty after voxelization
             continue
 
         N = coord.shape[0]
@@ -208,35 +206,30 @@ def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
     collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
     return collated
 
+
 def distillation_loss(pred_feat, target_feat, eps=1e-6):
     pred = F.normalize(pred_feat, dim=1, eps=eps)
     target = F.normalize(target_feat, dim=1, eps=eps)
     return 1 - (pred * target).sum(dim=1).mean()
 
+
 def _load_state(m, state):
-    """
-    Load a state_dict regardless of DataParallel wrapping differences.
-    """
+    """Load a state_dict regardless of DataParallel wrapping differences."""
     try:
-        m.load_state_dict(state)
-        return
+        m.load_state_dict(state); return
     except Exception:
         pass
     try:
-        stripped = {k.replace("module.", "", 1) if k.startswith("module.") else k: v
-                    for k, v in state.items()}
-        m.load_state_dict(stripped)
-        return
+        stripped = {k.replace("module.", "", 1) if k.startswith("module.") else k: v for k, v in state.items()}
+        m.load_state_dict(stripped); return
     except Exception:
         pass
     try:
-        added = {("module." + k if not k.startswith("module.") else k): v
-                 for k, v in state.items()}
-        m.load_state_dict(added)
-        return
+        added = {("module." + k if not k.startswith("module.") else k): v for k, v in state.items()}
+        m.load_state_dict(added); return
     except Exception as e:
         raise e
-    
+
 
 def train(
     data_dir,
@@ -253,7 +246,7 @@ def train(
     use_data_parallel=True,
     voxel_size: float = 0.10,  # outdoor default
     multiscale_voxel: bool = False,
-    feat_mode: str = "rvi" 
+    feat_mode: str = "rvi"
 ):
     # ---- Reproducibility ----
     torch.use_deterministic_algorithms(False)
@@ -274,22 +267,22 @@ def train(
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
-
     print(f"Using {workers} DataLoader workers for training...")
 
     collate_fn = partial(collate_for_ptv3, multiscale_voxel=multiscale_voxel)
 
-    dataloader = DataLoader(dataset,
-                            batch_size=batch_size,
-                            shuffle=True,
-                            num_workers=workers,
-                            pin_memory=True,
-                            persistent_workers=False,
-                            prefetch_factor=prefetch_factor,
-                            collate_fn=collate_fn,
-                            multiprocessing_context="spawn",
-                            generator=g
-                            )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=workers,
+        pin_memory=True,
+        persistent_workers=False,
+        prefetch_factor=prefetch_factor,
+        collate_fn=collate_fn,
+        multiprocessing_context="spawn",
+        generator=g,
+    )
 
     num_batches = len(dataloader)
     updates_per_epoch = math.ceil(max(1, num_batches) / max(1, accum_steps))
@@ -307,29 +300,32 @@ def train(
         epochs = math.ceil(total_steps / updates_per_epoch)
         print(f"Will train for {epochs} epochs to hit ~{total_steps} optimizer steps.")
 
-    # Infer dims from a probe sample + feat_mode selection
-    sample = dataset[0]
-    # Feature-channel selector (assumes feat columns: [reflectivity, velocity, intensity])
-    feat_dim_total = sample["feat"].shape[1]
+    # Probe sample + feat_mode selection (robust to missing keys)
+    probe = dataset[0]
+    feat_dim_total = probe["feat"].shape[1]
     col_map = {"r": 0, "v": 1, "i": 2}
     if feat_mode == "none":
         keep_cols = []
     else:
         keep_cols = [col_map[c] for c in feat_mode if c in col_map and col_map[c] < feat_dim_total]
-    input_dim = sample["coord"].shape[1] + len(keep_cols)
-    dino_dim = sample["dino_feat"].shape[1]
+    input_dim = probe["coord"].shape[1] + len(keep_cols)
+
+    if "dino_feat" not in probe:
+        raise RuntimeError("This training pipeline requires 'dino_feat' in preprocessed files for distillation.")
+    dino_dim = probe["dino_feat"].shape[1]
+
     print(f"Using input_dim={input_dim} (feat_mode='{feat_mode}', keep_cols={keep_cols}), dino_dim={dino_dim}")
 
     model = PointTransformerV3(
         in_channels=input_dim,
         enable_flash=False,                          # classic attention
-        enc_patch_size=(256, 256, 256, 256, 256),    
+        enc_patch_size=(256, 256, 256, 256, 256),
         dec_patch_size=(256, 256, 256, 256),
         enable_rpe=False,                            # optional
         upcast_attention=True,                       # safer QK numerics
         upcast_softmax=True
     ).to(device)
-    
+
     proj_head = torch.nn.Linear(64, dino_dim).to(device)
 
     if use_data_parallel and torch.cuda.device_count() > 1 and device.type == "cuda":
@@ -358,11 +354,10 @@ def train(
     best_loss = float("inf")
     start_epoch = 0
 
-    latest_ckpt_path = output_dir / "latest_checkpoint.pth"
-    best_ckpt_path = output_dir / "best_model.pth"
+    latest_ckpt_path = Path(output_dir) / "latest_checkpoint.pth"
+    best_ckpt_path = Path(output_dir) / "best_model.pth"
 
-
-    # Resume
+    # Resume if latest exists
     if latest_ckpt_path.exists():
         print(f"Resuming from checkpoint: {latest_ckpt_path}")
         checkpoint = torch.load(latest_ckpt_path, map_location=device)
@@ -378,9 +373,7 @@ def train(
         print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.6f}")
 
     for epoch in range(start_epoch, epochs):
-        model.train()
-        proj_head.train()
-
+        model.train(); proj_head.train()
         print(f"\nEpoch {epoch + 1}/{epochs}")
         skipped_batches = 0
         oom_streak = 0
@@ -391,18 +384,14 @@ def train(
 
         optimizer.zero_grad(set_to_none=True)
 
-        skipped_batches = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
-
                 if batch["coord"].numel() == 0:
-                    skipped_batches += 1
-                    continue
+                    skipped_batches += 1; continue
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
-                    skipped_batches += 1
-                    continue
+                    skipped_batches += 1; continue
                 idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
                 coord = batch["coord"].to(device, non_blocking=True)
@@ -410,9 +399,9 @@ def train(
                 grid_coord = batch["grid_coord"].to(device, non_blocking=True)
                 batch_tensor = batch["batch"].to(device, non_blocking=True)
                 offset = batch["offset"].to(device, non_blocking=True)
-                grid_size_val = batch["grid_size"].mean().item()
+                grid_size_val = float(batch["grid_size"].mean().item())
 
-                # ---- Feature-channel selection (matches feat_mode used for input_dim) ----
+                # Feature-channel selection (matches feat_mode used for input_dim)
                 cols = {"r": 0, "v": 1, "i": 2}
                 if feat_mode == "none":
                     feat_sel = torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
@@ -420,7 +409,7 @@ def train(
                     keep = [cols[c] for c in feat_mode if c in cols and cols[c] < feat.shape[1]]
                     feat_sel = feat[:, keep] if len(keep) else torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
 
-                # Normalize coord/feat per-batch before concat
+                # Normalize coord/feat per-batch then concatenate
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
                 if feat_sel.numel() > 0:
                     feat_sel = (feat_sel - feat_sel.mean(dim=0)) / (feat_sel.std(dim=0) + 1e-6)
@@ -429,14 +418,12 @@ def train(
                 if batch_idx == 0:
                     print(f"[Batch 0] input_feat stats: mean={input_feat.mean().item():.4f}, std={input_feat.std().item():.4f}")
 
-                # Basic input sanity
+                # NaN/Inf guard
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in input_feat, skipping batch")
-                    skipped_batches += 1
-                    continue
+                    skipped_batches += 1; continue
                 if input_feat.numel() == 0:
-                    skipped_batches += 1
-                    continue
+                    skipped_batches += 1; continue
 
                 data_dict = {
                     "coord": coord,
@@ -447,17 +434,14 @@ def train(
                     "batch": batch_tensor,
                 }
 
-                # with autocast(**autocast_kwargs):
                 output = model(data_dict)
-                
                 feats = torch.nan_to_num(output.feat, nan=0.0, posinf=1e4, neginf=-1e4).clamp_(-20, 20)
-                pred_proj = proj_head(feats.float())
+                pred_proj = torch.nn.functional.linear(feats.float(), weight=proj_head.weight, bias=proj_head.bias)
                 pred_proj = torch.nan_to_num(pred_proj, nan=0.0, posinf=1e4, neginf=-1e4)
                 if torch.isnan(pred_proj).any() or torch.isinf(pred_proj).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
-                    skipped_batches += 1
-                    continue
-                   
+                    skipped_batches += 1; continue
+
                 # Distill on visible points only
                 idx = idx_cpu.to(device, non_blocking=True)
                 pred_valid = pred_proj.index_select(0, idx)
@@ -466,7 +450,6 @@ def train(
 
                 loss_raw = distillation_loss(pred_valid, dino_valid)
                 loss = loss_raw / max(1, accum_steps)
-    
                 loss.backward()
                 counted_batches += 1
                 total_loss_raw += loss_raw.item()
@@ -480,60 +463,45 @@ def train(
                     scheduler.step()
                     update_count += 1
                     oom_streak = 0  # successful step resets OOM streak
-    
+
             except RuntimeError as e:
-                # Handle CUDA OOM robustly
                 if "out of memory" in str(e).lower():
                     skipped_batches += 1
                     oom_streak += 1
-                    print(f"[OOM][Batch {batch_idx}] {str(e)} | streak={oom_streak}. "
-                          f"Clearing cache and continuing.")
-                    # Drop large refs to help defragment
+                    print(f"[OOM][Batch {batch_idx}] {str(e)} | streak={oom_streak}. Clearing cache and continuing.")
                     for var in [
                         "coord","feat","grid_coord","batch_tensor","offset",
                         "input_feat","output","feats","pred_proj",
                         "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu","feat_sel"
                     ]:
-                        if var in locals():
-                            del locals()[var]
+                        if var in locals(): del locals()[var]
                     if device.type == "cuda":
                         torch.cuda.empty_cache()
-                    # If too many consecutive OOMs, break the epoch to avoid wasting time
                     if oom_streak >= 5:
                         print("[WARN] Too many consecutive OOMs; breaking to next epoch.")
                         break
                     continue
                 else:
-                    # Unknown runtime error: surface it
                     raise
-
             except Exception as e:
                 print(f"Error processing batch {batch_idx}: {str(e)}")
                 skipped_batches += 1
                 continue
-
             finally:
-                # Explicitly delete large variables (NO per-batch empty_cache)
                 for var in [
                     "coord","feat","grid_coord","batch_tensor","offset",
                     "input_feat","output","feats","pred_proj",
                     "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu","feat_sel"
                 ]:
-                    if var in locals():
-                        del locals()[var]
+                    if var in locals(): del locals()[var]
                 del batch
-                #torch.cuda.empty_cache()    
 
         denom_batches = counted_batches if counted_batches > 0 else 1
         avg_loss = total_loss_raw / denom_batches
-        print(f"Avg Loss (per batch) = {avg_loss:.6f} | "
-              f"Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
+        print(f"Avg Loss (per batch) = {avg_loss:.6f} | Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
 
-
-
-        # ---- Save latest (rolling) and epoch-suffixed checkpoints ----
+        # ---- Save latest and best checkpoints ----
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        # Get plain state_dicts (handle DP)
         model_state = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
         head_state = proj_head.module.state_dict() if isinstance(proj_head, torch.nn.DataParallel) else proj_head.state_dict()
 
@@ -553,9 +521,9 @@ def train(
         torch.save(state, latest_ckpt_path)
         print(f"Saved: {latest_ckpt_epoch.name} and latest_checkpoint.pth")
 
-        # ---- Save best ----
         if avg_loss < best_loss:
             best_loss = avg_loss
+            best_ckpt_path = Path(output_dir) / "best_model.pth"
             torch.save(state, best_ckpt_path)
             print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
@@ -566,8 +534,8 @@ def train(
 
     print("Training complete.")
 
+
 if __name__ == "__main__":
-   
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
     TRAIN_CHECKPOINTS.mkdir(parents=True, exist_ok=True)
@@ -582,7 +550,7 @@ if __name__ == "__main__":
         prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=False,
-        voxel_size=0.10,  # 10 cm voxel size
+        voxel_size=0.10,      # 10 cm voxel size
         multiscale_voxel=False,
         feat_mode="rvi",
     )

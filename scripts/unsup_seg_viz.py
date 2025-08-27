@@ -9,8 +9,8 @@ import zipfile
 # EDIT THESE CONSTANTS
 # ==============================
 INFER_DIR  = Path("data/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/inference_output")
-OUT_DIR    = Path("data/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/unsup_outputs")
-K          = 10  # used for palette sizing only
+OUT_DIR    = Path("data/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/26082025_1253_unsup_outputs")
+K          = 8  # used for palette sizing only
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
 PREFER_ZIP = True                           # prefer reading labels from ZIP if it exists

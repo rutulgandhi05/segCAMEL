@@ -1,4 +1,7 @@
 import torch
+import numpy as np
+from typing import Union
+
 
 class LidarToImageProjector:
     def __init__(self, intrinsic, extrinsic, image_size, feature_map_size, patch_features):
@@ -40,7 +43,7 @@ class LidarToImageProjector:
         pix = (self.K @ cam_pts.T).T
         uvs = torch.empty((N, 2), device=lidar_xyz.device, dtype=lidar_xyz.dtype)
         uvs[in_front] = pix[:, :2] / pix[:, 2:3]
-        # for points not in_front, uvs are left uninitialized; always mask them
+        # for points not in_front, uvs are left uninitialized; always mask them via in_front
         return uvs, in_front, depth
 
     def _sample_bilinear(self, u, v):
@@ -76,14 +79,25 @@ class LidarToImageProjector:
 
         return f00 * w00 + f01 * w01 + f10 * w10 + f11 * w11  # (M,D)
 
-    def assign_features(self, lidar_xyz, *, bilinear: bool = False, occlusion_eps: float = 0.05):
+    @torch.no_grad()
+    def assign_features(
+        self,
+        lidar_xyz: torch.Tensor,
+        *,
+        bilinear: bool = False,
+        occlusion_eps: Union[float, torch.Tensor] = 0.05,
+    ):
         """
         Returns:
           point_feats: (N,D) float32
-          valid_mask: (N,) bool  (true if Z>0 and within image bounds)
+          valid_mask: (N,) bool  (true if Z>0 and within image bounds [+ occlusion])
+
         Args:
-          bilinear: if True, use bilinear sampling on token lattice; else nearest token
-          occlusion_eps: if >0, keep only front-most points within each token cell
+          bilinear: if True, use bilinear sampling on token lattice; else nearest token.
+          occlusion_eps:
+            - float: fixed z-occlusion tolerance (meters in camera Z) per token.
+            - Tensor (N,): **per-point** tolerance (meters) to enable range-aware occlusion.
+                           Each point is kept if depth <= min_depth[token] + occlusion_eps[i].
         """
         device = lidar_xyz.device
         N = lidar_xyz.shape[0]
@@ -96,19 +110,45 @@ class LidarToImageProjector:
 
         # Optional: depth-aware occlusion filtering per token cell
         keep = valid.clone()
-        if occlusion_eps > 0:
+        if (isinstance(occlusion_eps, (float, int)) and occlusion_eps > 0) or (
+            torch.is_tensor(occlusion_eps) and occlusion_eps.numel() == N
+        ):
             # token index (nearest) for grouping
             j = torch.clamp((u / self.patch_w).long(), 0, self.Wf - 1)
             i = torch.clamp((v / self.patch_h).long(), 0, self.Hf - 1)
-            tok = i * self.Wf + j
-            # compute min depth per token
+            tok = i * self.Wf + j  # (N,)
+
+            # compute min depth per token among valid points
             depth_valid = depth.clone()
             depth_valid[~valid] = float("inf")
-            # scatter reduce (PyTorch 2.0+). If unavailable, do CPU numpy fallback.
+
             min_depth = torch.full((self.Hf * self.Wf,), float("inf"), device=device, dtype=depth.dtype)
-            min_depth = min_depth.scatter_reduce(0, tok[valid], depth[valid], reduce='amin', include_self=True)
-            # keep only those near the min
-            keep = valid & (depth <= (min_depth[tok] + occlusion_eps))
+
+            # Try fast scatter_reduce (PyTorch >= 2.0); else fallback to NumPy segment-min
+            try:
+                # Newer APIs accept reduce='amin'
+                min_depth = min_depth.scatter_reduce(
+                    0, tok[valid], depth[valid], reduce='amin', include_self=True
+                )
+            except Exception:
+                # CPU/NumPy fallback
+                tok_cpu = tok[valid].detach().cpu().numpy()
+                dep_cpu = depth[valid].detach().cpu().numpy().astype(np.float32)
+                arr = np.full((self.Hf * self.Wf,), np.inf, dtype=np.float32)
+                # segment-min: arr[idx] = min(arr[idx], dep)
+                np.minimum.at(arr, tok_cpu, dep_cpu)
+                min_depth = torch.from_numpy(arr).to(device=device, dtype=depth.dtype)
+
+            # prepare per-point epsilon
+            if torch.is_tensor(occlusion_eps):
+                eps_p = occlusion_eps.to(device=device, dtype=depth.dtype)
+                if eps_p.numel() != N:
+                    raise ValueError(f"occlusion_eps tensor must be shape (N,), got {tuple(occlusion_eps.shape)}")
+            else:
+                eps_p = torch.full((N,), float(occlusion_eps), device=device, dtype=depth.dtype)
+
+            # keep only those near the token's minimum depth
+            keep = valid & (depth <= (min_depth[tok] + eps_p))
 
         idx = torch.nonzero(keep, as_tuple=False).squeeze(1)
         if idx.numel() > 0:
