@@ -247,7 +247,7 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         neighbor_range=NEIGHBOR_RANGE,
         min_component=MIN_COMPONENT,
         per_frame_hook=None,
-        collect_metrics=True,
+        collect_metrics=False,
         device=DEVICE,
         assign_chunk=ASSIGN_CHUNK,
         feature_cfg=FEATURE_CFG,
@@ -256,7 +256,8 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         save_labels_dir=None,
         zip_labels_path=ZIP_PATH,
         zip_mode="w",
-        zip_compress=zipfile.ZIP_DEFLATED,
+        zip_compress=zipfile.ZIP_STORED,
+        npz_compress=False,
         # quality knobs (shared)
         noise_label=NOISE_LABEL,
         range_gate_m=RANGE_GATE_M,
@@ -265,6 +266,7 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         dl_prefetch=DL_PREFETCH,
         dl_batch_io=DL_BATCH_IO,
         dl_pin_memory=DL_PIN_MEMORY,
+        max_points_smooth=350_000,
         # new mode-specific args
         **seg_kwargs,
     )

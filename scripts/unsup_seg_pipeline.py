@@ -155,13 +155,6 @@ def _build_features(item: Dict[str, torch.Tensor], feature_cfg: Optional[Dict] =
 # ------------------------------------------------------------------------ #
 
 def _distance_bins(coord_raw: torch.Tensor, edges: List[float]) -> List[torch.Tensor]:
-    """
-    Produce len(edges) bins:
-      [0, edges[1]), [edges[1], edges[2]), ..., [edges[-1], inf)
-    Special-cases:
-      - edges == []  -> 1 bin: [0, inf)
-      - edges == [e] -> 1 bin: [0, inf)
-    """
     r = torch.linalg.norm(coord_raw, dim=1)
     if edges is None or len(edges) <= 1:
         return [(r >= 0.0)]
@@ -177,10 +170,6 @@ def _distance_bins(coord_raw: torch.Tensor, edges: List[float]) -> List[torch.Te
     return masks
 
 def _align_ratios_to_bins(ratios: Optional[List[float]], bin_count: int) -> np.ndarray:
-    """
-    Ensure ratios length == bin_count, padding with last value or truncating as needed,
-    then renormalize to sum=1. If ratios is None/empty, use uniform.
-    """
     if bin_count <= 0:
         return np.array([], dtype=np.float64)
     if ratios is None or len(ratios) == 0:
@@ -239,7 +228,6 @@ def _stratified_subsample(
 # ------------------------------------------------------------------------ #
 
 def _kmeanspp_init(x_unit: torch.Tensor, k: int, dev: torch.device, seed: int) -> torch.Tensor:
-    """K-means++ for cosine k-means. x_unit must be unit-normalized on 'dev'."""
     assert x_unit.ndim == 2 and x_unit.shape[0] >= k, "Insufficient samples for k-means++ seeding"
     gen = torch.Generator(device=dev).manual_seed(seed)
     i0 = torch.randint(x_unit.shape[0], (1,), generator=gen, device=dev).item()
@@ -262,20 +250,18 @@ def learn_prototypes_from_dataset(
     sample_per_frame: int = 20000,
     seed: int = 0,
     use_visible_for_prototypes: bool = True,
-    invisible_weight: float = 1.0,  # API completeness
+    invisible_weight: float = 1.0,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     update_chunk: int = 1_000_000,
     feature_cfg: Optional[Dict] = None,
     dist_edges: Optional[List[float]] = None,
     dist_ratios: Optional[List[float]] = None,
     use_fp16: Optional[bool] = None,
-    # DataLoader knobs
     dl_workers: int = 8,
     dl_prefetch: int = 4,
     dl_batch_io: int = 32,
     dl_pin_memory: bool = True,
 ) -> torch.Tensor:
-    """Learn K unit-norm prototypes using a DataLoader over *_inference.pth files (no resume)."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     dev = torch.device(device)
@@ -288,9 +274,7 @@ def learn_prototypes_from_dataset(
 
     if feature_cfg is None: feature_cfg = {}
     if dist_edges is None:  dist_edges = [0.0, 20.0, 40.0]
-    # note: dist_ratios can be any length; auto-aligned later
 
-    # ---- Seeding (via DL) ----
     centroids = None
     buf, seen = [], 0
     loader_seed = _make_loader(infer_dir, workers=dl_workers, prefetch=dl_prefetch, batch_io=dl_batch_io, pin_memory=dl_pin_memory)
@@ -313,7 +297,6 @@ def learn_prototypes_from_dataset(
         Xcat = F.normalize(Xcat, dim=1)
         centroids = _kmeanspp_init(Xcat, k, dev=dev, seed=seed)
 
-    # ---- Passes (via DL) ----
     loader = _make_loader(infer_dir, workers=dl_workers, prefetch=dl_prefetch, batch_io=dl_batch_io, pin_memory=dl_pin_memory)
     for _ in tqdm(range(max_passes), desc="Learning prototypes"):
         accum = torch.zeros_like(centroids, device=dev, dtype=torch.float32)
@@ -335,7 +318,7 @@ def learn_prototypes_from_dataset(
                 for s in range(0, X.shape[0], update_chunk):
                     Xe = X[s:s+update_chunk]; Ze = X_mm[s:s+update_chunk]
                     idx = (Ze @ C_mm.T).argmax(dim=1)
-                    accum.index_add_(0, idx, Xe)  # accumulate in FP32
+                    accum.index_add_(0, idx, Xe)
                     counts += torch.bincount(idx, minlength=k).to(counts.dtype)
 
         m = counts > 0
@@ -349,11 +332,6 @@ def learn_prototypes_from_dataset(
 # ------------------------------------------------------------------------ #
 
 def _kappa_from_Rbar(Rbar: torch.Tensor, dim: int, eps: float = 1e-6) -> torch.Tensor:
-    """
-    Approximate kappa from mean resultant length Rbar on S^{dim-1}.
-    Uses a common approximation: kappa ≈ Rbar*(dim - Rbar^2)/(1 - Rbar^2).
-    Clamped to a small minimum to avoid numerical issues.
-    """
     R = Rbar.clamp(min=eps, max=1 - 1e-6)
     num = R * (dim - R * R)
     den = (1.0 - R * R).clamp_min(eps)
@@ -375,18 +353,11 @@ def learn_vmf_from_dataset(
     dist_edges: Optional[List[float]] = None,
     dist_ratios: Optional[List[float]] = None,
     use_fp16: Optional[bool] = None,
-    # DataLoader knobs
     dl_workers: int = 8,
     dl_prefetch: int = 4,
     dl_batch_io: int = 32,
     dl_pin_memory: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Learn a vMF mixture on L2-normalized features.
-    Returns:
-      mu    : (k, D) unit vectors
-      kappa : (k,) concentration parameters
-    """
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     dev = torch.device(device)
@@ -398,7 +369,6 @@ def learn_vmf_from_dataset(
     if feature_cfg is None: feature_cfg = {}
     if dist_edges is None:  dist_edges = [0.0, 20.0, 40.0]
 
-    # ---- Seed μ via k-means++ on a buffer (same as k-means seeding) ----
     buf, seen = [], 0
     loader_seed = _make_loader(infer_dir, workers=dl_workers, prefetch=dl_prefetch, batch_io=dl_batch_io, pin_memory=dl_pin_memory)
     mu = None
@@ -422,15 +392,12 @@ def learn_vmf_from_dataset(
         mu = _kmeanspp_init(Xcat, k, dev=dev, seed=seed)
 
     D = int(mu.shape[1])
-    # Initialize kappa moderately from global Rbar estimate
     kappa = torch.full((k,), 10.0, device=dev, dtype=torch.float32)
 
-    # ---- EM iterations ----
     loader = _make_loader(infer_dir, workers=dl_workers, prefetch=dl_prefetch, batch_io=dl_batch_io, pin_memory=dl_pin_memory)
     for _ in tqdm(range(max_passes), desc="vMF EM"):
-        # E-step accumulators
-        V = torch.zeros_like(mu, device=dev, dtype=torch.float32)     # sum_n r_nc x_n
-        Nk = torch.zeros((k,), device=dev, dtype=torch.float32)       # sum_n r_nc
+        V = torch.zeros_like(mu, device=dev, dtype=torch.float32)
+        Nk = torch.zeros((k,), device=dev, dtype=torch.float32)
 
         for batch in loader:
             for item in batch:
@@ -441,7 +408,6 @@ def learn_vmf_from_dataset(
                 if X.numel() == 0: continue
 
                 X = F.normalize(X, dim=1).to(dev, non_blocking=True)
-                # logits = κ * (x·μ)
                 if use_fp16 and dev.type == "cuda":
                     X_mm = X.to(torch.float16); MU_mm = mu.to(torch.float16); kappa_mm = kappa.to(torch.float16)
                 else:
@@ -450,20 +416,15 @@ def learn_vmf_from_dataset(
                 for s in range(0, X.shape[0], update_chunk):
                     Xe = X[s:s+update_chunk]
                     Ze = X_mm[s:s+update_chunk]
-                    sim = Ze @ MU_mm.T                      # (m,k)
-                    logits = sim * kappa_mm.unsqueeze(0)    # (m,k)
-                    # subtract max for stability
+                    sim = Ze @ MU_mm.T
+                    logits = sim * kappa_mm.unsqueeze(0)
                     logits_f32 = logits.to(torch.float32)
                     logits_f32 -= logits_f32.max(dim=1, keepdim=True).values
-                    R = torch.softmax(logits_f32, dim=1)    # responsibilities
-                    # accumulate
+                    R = torch.softmax(logits_f32, dim=1)
                     V += R.T @ Xe
                     Nk += R.sum(dim=0).to(Nk.dtype)
 
-        # M-step: update μ, κ
-        # μ_c ← normalize(V_c)
         mu = F.normalize(V, dim=1).to(torch.float32)
-        # κ_c from resultant length
         Vnorm = V.norm(dim=1).clamp_min(1e-8)
         Rbar = (Vnorm / Nk.clamp_min(1e-6)).clamp(0.0, 0.999999)
         kappa = _kappa_from_Rbar(Rbar, D)
@@ -485,32 +446,23 @@ def smooth_labels_voxel(
     range_gate_m: Optional[float] = None,
 ) -> np.ndarray:
     """
-    Majority-vote smoothing over voxel neighborhoods with two safeguards:
-      - ignore_label: this label (e.g., -1 noise) neither votes nor receives votes
-      - range_gate_m: neighbors only vote if their mean range differs by <= this threshold
-
-    Inputs:
-      grid_coord : (N,3) int32 voxel indices (x,y,z) for each point
-      labels     : (N,)  int labels
+    Python-mode smoothing; keep it because it’s robust, but it can be slow.
     """
     if grid_coord.numel() == 0 or labels.size == 0 or iters <= 0:
         return labels
 
-    # --- shift voxel coords to be non-negative before bit-packing (robust for negatives) ---
     g = grid_coord.cpu().numpy().astype(np.int64)
     mins = g.min(axis=0)
-    g = g - mins  # safe: preserves relative neighborhoods; decoding uses the same shifted space
+    g = g - mins
 
     lbl = labels.copy()
 
-    # pack voxel coordinate (21 bits per axis)
     key = (g[:, 0] << 42) + (g[:, 1] << 21) + (g[:, 2])
     from collections import defaultdict as _dd
     vox2idx: Dict[int, List[int]] = _dd(list)
     for i, k in enumerate(key):
         vox2idx[int(k)].append(i)
 
-    # optional per-voxel mean range
     vox_range: Optional[Dict[int, float]] = None
     if (coord_raw is not None) and (range_gate_m is not None):
         r = torch.linalg.norm(coord_raw, dim=1).cpu().numpy()
@@ -519,14 +471,12 @@ def smooth_labels_voxel(
             if idxs:
                 vox_range[k] = float(r[idxs].mean())
 
-    # neighbor offsets
     offs = np.array([(dx, dy, dz)
                      for dx in range(-neighbor_range, neighbor_range + 1)
                      for dy in range(-neighbor_range, neighbor_range + 1)
                      for dz in range(-neighbor_range, neighbor_range + 1)],
                     dtype=np.int64)
 
-    # smoothing iterations
     for _ in range(iters):
         new_lbl = lbl.copy()
         for k, idxs in vox2idx.items():
@@ -557,7 +507,6 @@ def smooth_labels_voxel(
                 new_lbl[idxs] = vals[counts.argmax()]
         lbl = new_lbl
 
-    # snap tiny connected components (per (label, voxel) key)
     if min_component > 0:
         from collections import defaultdict as _dd2
         counts = _dd2(int)
@@ -593,10 +542,13 @@ def smooth_labels_voxel(
 #                         Segmentation (nearest proto)                     #
 # ------------------------------------------------------------------------ #
 
-def _npz_bytes(labels: np.ndarray) -> bytes:
-    """Pack labels into an .npz (compressed) in memory and return bytes."""
+def _npz_bytes(labels: np.ndarray, compress: bool = False) -> bytes:
+    """Pack labels into an .npz (optionally compressed) and return bytes."""
     buff = io.BytesIO()
-    np.savez_compressed(buff, labels=labels.astype(np.int32))
+    if compress:
+        np.savez_compressed(buff, labels=labels.astype(np.int32))
+    else:
+        np.savez(buff, labels=labels.astype(np.int32))
     return buff.getvalue()
 
 @torch.no_grad()
@@ -616,33 +568,30 @@ def segment_dataset(
     use_fp16: Optional[bool] = None,
     # ---- ZIP writing (optional) ----
     zip_labels_path: Optional[Path] = None,
-    zip_mode: str = "w",  # fresh by default
-    zip_compress: int = zipfile.ZIP_DEFLATED,
+    zip_mode: str = "w",
+    zip_compress: int = zipfile.ZIP_STORED,            # <<<< default: STORE (no re-compress)
+    npz_compress: bool = False,                         # <<<< inner .npz uncompressed by default
     # ---- Quality knobs (k-means cosine path) ----
-    tau_reject: Optional[float] = None,   # global cosine-sim threshold
+    tau_reject: Optional[float] = None,
     noise_label: int = -1,
-    range_gate_m: Optional[float] = None, # e.g., 1.5 -> depth-aware smoothing
+    range_gate_m: Optional[float] = None,
     # ---- DataLoader knobs ----
     dl_workers: int = 8,
     dl_prefetch: int = 4,
     dl_batch_io: int = 32,
     dl_pin_memory: bool = True,
     # ---- New: vMF & distance-aware thresholds ----
-    mode: str = "kmeans",                                    # "kmeans" | "vmf"
-    vmf_kappa: Optional[torch.Tensor] = None,                # (k,)
-    posterior_tau: Optional[float] = None,                   # for "vmf": reject if max posterior < posterior_tau
-    tau_edges: Optional[List[float]] = None,                 # for distance-aware thresholds (both modes)
-    tau_map: Optional[List[float]] = None,                   # len must match bins from tau_edges
+    mode: str = "kmeans",
+    vmf_kappa: Optional[torch.Tensor] = None,
+    posterior_tau: Optional[float] = None,
+    tau_edges: Optional[List[float]] = None,
+    tau_map: Optional[List[float]] = None,
+    # ---- Speed guard: skip smoothing beyond this point count
+    max_points_smooth: Optional[int] = 300_000,         # <<<< skip smoothing on very large frames
 ) -> Union[Dict[str, np.ndarray], Tuple[Dict[str, np.ndarray], Dict[str, List[torch.Tensor]]]]:
     """
     Segment dataset and optionally persist labels (dir and/or a single ZIP).
     Fully DataLoader-based and **no resume**.
-
-    mode="kmeans" (default): uses cosine similarity to centroids (unit vectors).
-      - Optional: global tau_reject (cosine) or distance-aware tau via tau_edges/tau_map.
-
-    mode="vmf": uses posteriors from vMF(μ, κ): softmax(κ_c * cosine(x, μ_c)).
-      - Reject with posterior_tau (global) or distance-aware via tau_edges/tau_map (values are posterior thresholds).
     """
     if feature_cfg is None:
         feature_cfg = {}
@@ -654,7 +603,6 @@ def segment_dataset(
         try: torch.set_float32_matmul_precision("high")
         except Exception: pass
 
-    # Prepare centroids and, if vmf, kappas
     C = F.normalize(centroids.to(torch.float32), dim=1).to(dev, non_blocking=True)
     C_mm = C.to(torch.float16) if (use_fp16 and dev.type == "cuda") else C
     K = C.shape[0]
@@ -666,17 +614,13 @@ def segment_dataset(
         kappa_dev = vmf_kappa.to(dev, dtype=torch.float32, non_blocking=True)
         if kappa_dev.numel() != K:
             raise ValueError(f"vmf_kappa length {kappa_dev.numel()} != number of centroids {K}")
-        # small floor for stability
         kappa_dev = kappa_dev.clamp_min(1e-3)
         if posterior_tau is None and (tau_edges is None or tau_map is None):
-            # provide a mild default if user didn't pass any posterior threshold
             posterior_tau = 0.05
 
-    # Distance-aware threshold bins (optional, both modes)
     tau_bins_edges = None
     tau_bins_vals = None
     if (tau_edges is not None) and (tau_map is not None):
-        # edges like [0, 15, 30, 60], map like [0.10, 0.12, 0.14, 0.16]
         tau_bins_edges = torch.as_tensor(list(tau_edges), device=dev, dtype=torch.float32)
         tau_bins_vals  = torch.as_tensor(list(tau_map),  device=dev, dtype=torch.float32)
 
@@ -687,16 +631,14 @@ def segment_dataset(
         save_labels_dir = Path(save_labels_dir)
         save_labels_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prepare ZIP (optional) — no resume, mode "w" by default
     zf = None
     written_names = None
     if zip_labels_path is not None:
         zip_labels_path = Path(zip_labels_path)
         zip_labels_path.parent.mkdir(parents=True, exist_ok=True)
         zf = zipfile.ZipFile(zip_labels_path, mode=zip_mode, compression=zip_compress, allowZip64=True)
-        written_names = set()  # guard against accidental duplicates
+        written_names = set()
 
-    # Build loader over full set
     loader = _make_loader(
         infer_dir,
         workers=dl_workers,
@@ -708,20 +650,17 @@ def segment_dataset(
     try:
         for batch in tqdm(loader, desc="Segmenting + (opt) metrics/export"):
             for item in batch:
-                stem = item["file_stem"]  # unique now
+                stem = item["file_stem"]
 
                 Z0 = _build_features(item, feature_cfg)
                 if Z0.numel() == 0:
-                    # Skip writing empties; just record in results to keep accounting.
                     results[stem] = np.empty((0,), dtype=np.int64)
                     continue
 
-                # Normalize then chunked similarity
                 Z_norm = F.normalize(Z0, dim=1)
                 N = Z_norm.shape[0]
                 idx_out = np.empty((N,), dtype=np.int64)
 
-                # Precompute per-point distances if we will use distance-aware thresholds
                 need_tau_bins = (tau_bins_edges is not None) and (tau_bins_vals is not None)
                 r_all = None
                 if need_tau_bins:
@@ -730,18 +669,15 @@ def segment_dataset(
                 for s in range(0, N, assign_chunk):
                     Ze_f32 = Z_norm[s:s+assign_chunk].to(dev, non_blocking=True)
                     Ze_mm  = Ze_f32.to(torch.float16) if (use_fp16 and dev.type == "cuda") else Ze_f32
-                    sim    = Ze_mm @ C_mm.T   # (m, K)
+                    sim    = Ze_mm @ C_mm.T
 
                     if mode.lower() == "vmf":
-                        # vMF logits = κ * cosine
                         logits = sim.to(torch.float32) * kappa_dev.unsqueeze(0)
-                        # stabilize
                         logits = logits - logits.max(dim=1, keepdim=True).values
-                        post = torch.softmax(logits, dim=1)   # (m, K)
+                        post = torch.softmax(logits, dim=1)
                         max_post, hard = post.max(dim=1)
                         idx = hard.detach().cpu().numpy().astype(np.int64)
 
-                        # Rejection: posterior threshold (global or per-distance)
                         if (posterior_tau is not None) or need_tau_bins:
                             if need_tau_bins:
                                 r_chunk = r_all[s:s+assign_chunk]
@@ -755,11 +691,8 @@ def segment_dataset(
                                 idx[rej] = int(noise_label)
 
                     else:
-                        # k-means cosine path (old behavior)
                         max_sim, hard = sim.max(dim=1)
                         idx = hard.detach().cpu().numpy().astype(np.int64)
-
-                        # Rejection: cosine threshold (global or per-distance)
                         if (tau_reject is not None) or need_tau_bins:
                             if need_tau_bins:
                                 r_chunk = r_all[s:s+assign_chunk]
@@ -774,8 +707,9 @@ def segment_dataset(
 
                     idx_out[s:s+idx.shape[0]] = idx
 
-                # Optional voxel smoothing (label-aware + depth-gated)
-                if smoothing_iters > 0:
+                # ---- Smoothing (guarded) ----
+                do_smooth = (smoothing_iters > 0) and (max_points_smooth is None or N <= int(max_points_smooth))
+                if do_smooth:
                     idx_out = smooth_labels_voxel(
                         grid_coord=item["grid_coord"],
                         labels=idx_out,
@@ -794,12 +728,11 @@ def segment_dataset(
                 if zf is not None:
                     name = f"{stem}_clusters.npz"
                     if (written_names is not None) and (name in written_names):
-                        # ultra-defensive: shouldn't trigger now that stem is unique, but keep it safe
                         k = 2
                         while f"{stem}__dup{k}_clusters.npz" in written_names:
                             k += 1
                         name = f"{stem}__dup{k}_clusters.npz"
-                    zf.writestr(name, _npz_bytes(idx_out))
+                    zf.writestr(name, _npz_bytes(idx_out, compress=npz_compress))
                     if written_names is not None:
                         written_names.add(name)
 
@@ -809,7 +742,6 @@ def segment_dataset(
                     per_frame_hook(stem, item["coord_raw"].cpu().numpy().astype(np.float32), idx_out)
 
                 if collect_metrics and accum is not None:
-                    # store original 64-D feats for metrics comparability
                     accum["feats"].append(item["feat64"])
                     accum["labels"].append(torch.as_tensor(idx_out, dtype=torch.int64))
                     accum["mask"].append(item["mask"])
