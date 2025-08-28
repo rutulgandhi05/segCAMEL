@@ -144,16 +144,20 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
 
     lidar_zip = dataset_folder / "Aeva_data" / "LiDAR.tar.gz"
     if lidar_zip.exists():
+        print(f" [DATASET] Extracting {lidar_zip} ...")
         with tarfile.open(lidar_zip, "r:gz") as tar:
             tar.extractall(path=dataset_folder / "Aeva_data" / "LiDAR")
 
     image_left_zip = dataset_folder / "Image" / "stereo_left.tar.gz"
+    
     if image_left_zip.exists():
+        print(f" [DATASET] Extracting {image_left_zip} ...")
         with tarfile.open(image_left_zip, "r:gz") as tar:
             tar.extractall(path=dataset_folder / "Image" / "stereo_left")
 
     image_right_zip = dataset_folder / "Image" / "stereo_right.tar.gz"
     if image_right_zip.exists():
+        print(f" [DATASET] Extracting {image_right_zip} ...")
         with tarfile.open(image_right_zip, "r:gz") as tar:
             tar.extractall(path=dataset_folder / "Image" / "stereo_right")
 
