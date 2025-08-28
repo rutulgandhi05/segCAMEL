@@ -15,7 +15,7 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
-export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
+export HERCULES_DATASET=$(ws_find hercules_dataset)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
 echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"
@@ -37,7 +37,7 @@ echo "[INFO] Starting training..."
 python -m scripts.train_segmentation
 
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
-export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output
+export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output_epoch_50
 
 echo "[INFO] Copying checkpoints to $RESULT_DIR"
 mkdir -p $RESULT_DIR
