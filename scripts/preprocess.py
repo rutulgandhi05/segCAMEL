@@ -308,7 +308,7 @@ if __name__ == "__main__":
     if pipeline_mode == "inference":
         folders = ["Sports_complex_03_Day"]  # inference only , "Library_03_Day"
     elif pipeline_mode == "train":
-        folders = ["Library_01_Day"] #, "Sports_complex_01_Day", "Mountain_01_Day"
+        folders = ["Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
     else:
         raise ValueError(f"Unknown PIPELINE_MODE={pipeline_mode}")
 
