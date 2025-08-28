@@ -145,6 +145,8 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     lidar_zip = _first_existing_path(
         dataset_folder / "Aeva_data" / "LiDAR.tar.gz",
         dataset_folder / "Avea_data" / "LiDAR.tar.gz",
+        dataset_folder / "Aeva_data" / "lidar.tar.gz",
+        dataset_folder / "Avea_data" / "lidar.tar.gz",
     )
     if lidar_zip.exists():
         print(f" [DATASET] Extracting {lidar_zip} ...")
