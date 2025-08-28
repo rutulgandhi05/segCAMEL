@@ -6,7 +6,7 @@
 #SBATCH -c 8
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 20:00:00 
+#SBATCH -t 30:00:00 
 #SBATCH -p cpu_il
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
