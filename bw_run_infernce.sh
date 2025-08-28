@@ -15,13 +15,14 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
-export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
+export HERCULES_DATASET=$(ws_find hercules_dataset)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
 echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"
 cp -r --verbose $HERCULES_DATASET/* $TMP_HERCULES_DATASET/
 echo "[INFO] Dataset copied."
 
+export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output
