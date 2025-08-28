@@ -15,7 +15,7 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
-export HERCULES_DATASET=$(ws_find hercules_dataset)
+export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
 echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"

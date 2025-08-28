@@ -543,7 +543,7 @@ if __name__ == "__main__":
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
-        epochs=30,
+        epochs=50,
         workers=12,
         batch_size=4,
         accum_steps=8,
