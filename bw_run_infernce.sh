@@ -6,7 +6,7 @@
 #SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 10:00:00
+#SBATCH -t 20:00:00
 #SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:1
 #SBATCH --mail-type ALL
@@ -29,7 +29,7 @@ export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_ou
 export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs
 export PIPELINE_MODE="inference"
 
-export PREPROCESS_FOLDERS="Sports_complex_03_Day"
+export PREPROCESS_FOLDERS="sports_complex_03_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
