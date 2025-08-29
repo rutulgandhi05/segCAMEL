@@ -25,8 +25,7 @@ echo "[INFO] Dataset copied."
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export PIPELINE_MODE="train"
-
-export PREPROCESS_FOLDERS="library_01_Day, sports_complex_01_Day, mountain_01_Day"
+export PREPROCESS_FOLDERS="library_01_Day, mountain_01_Day, parking_lot_01_Day, river_island_01_Day, sports_complex_01_Day, stream_01_Day"
 
 mkdir -p $PREPROCESS_OUTPUT_DIR
 mkdir -p $TRAIN_CHECKPOINTS
