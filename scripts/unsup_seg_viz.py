@@ -8,25 +8,25 @@ import zipfile
 # ==============================
 # EDIT THESE CONSTANTS
 # ==============================
-INFER_DIR  = Path("data/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/inference_output")
-OUT_DIR    = Path("data/23082025_0235_segcamel_train_with_vel_md1_ld1_sd1/26082025_1253_unsup_outputs")
-K          = 8  # used for palette sizing only
+INFER_DIR  = Path("data/28082025_1348_segcamel_train_output/28082025_2002_inference_output")
+OUT_DIR    = Path("data/28082025_1348_segcamel_train_output/28082025_2002_unsup_outputs")
+K          = 10  # used for palette sizing only
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
 PREFER_ZIP = True                           # prefer reading labels from ZIP if it exists
 
 #   "labels" -> export saved labels to PLY and/or PNG (no interactive window)
 #   "o3d"    -> interactive Open3D viewer
-VIEW_MODE = "o3d"  # "labels" or "o3d"
+VIEW_MODE = "labels"  # "labels" or "o3d"
 
 # Exports (only used in VIEW_MODE="labels")
-SAVE_PLY = False
+SAVE_PLY = True
 SAVE_PNG = False
 PLY_LIMIT: Optional[int] = None  # set to an int to cap number of exported frames
 PNG_W, PNG_H = 1600, 1200
 
 # Interactive Open3D toggles (used in both modes where relevant)
-DO_OPEN3D_VIEW = True  # if True in "labels" mode, opens window instead of headless snapshot
+DO_OPEN3D_VIEW = False  # if True in "labels" mode, opens window instead of headless snapshot
 
 # ==============================
 # Implementation
@@ -123,7 +123,7 @@ def _zip_load_labels(zip_path: Path, name_in_zip: str) -> np.ndarray:
 # ---------------- Dump map (robust) ---------------- #
 
 def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
-    dumps = sorted(infer_dir.glob("*_inference.pth"))
+    dumps = sorted(list(infer_dir.glob("*_inference.pth"))[:10])
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
     for p in dumps:

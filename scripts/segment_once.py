@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 # --- Core paths (env-driven, unchanged) ---
 INFER_DIR   = Path(os.environ.get("INFERENCE_OUTPUT_DIR"))        # where *_inference.pth live
 OUT_DIR     = Path(os.environ.get("SEGMENTATION_OUT_DIR"))        # root for outputs
-K           = 8                                                   # number of clusters
+K           = 10                                                   # number of clusters
 ZIP_PATH    = OUT_DIR / f"labels_k{K}.zip"                        # labels go into this single zip (fresh each run)
 PROTOS_PATH = OUT_DIR / "prototypes.pt"
 RUN_CFG_JSON= OUT_DIR / "run_config.json"
@@ -39,8 +39,8 @@ MAX_PASSES        = 3
 SAMPLE_PER_FRAME  = 50_000
 USE_FP16_MATMUL   = True
 SEED              = 0
-DIST_EDGES        = [0.0, 15.0, 30.0, 60.0]
-DIST_RATIOS       = [0.40, 0.35, 0.20, 0.05]
+DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]
+DIST_RATIOS       = [0.35, 0.30, 0.20, 0.10, 0.05]
 
 # --- Segmentation ---
 SMOOTH_ITERS      = 2
@@ -266,7 +266,7 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         dl_prefetch=DL_PREFETCH,
         dl_batch_io=DL_BATCH_IO,
         dl_pin_memory=DL_PIN_MEMORY,
-        max_points_smooth=350_000,
+        max_points_smooth=550_000,
         # new mode-specific args
         **seg_kwargs,
     )

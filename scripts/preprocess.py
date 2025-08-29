@@ -305,12 +305,11 @@ if __name__ == "__main__":
     save_dir = Path(str(save_dir))
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    if pipeline_mode == "inference":
-        folders = ["Sports_complex_03_Day"]  # inference only , "Library_03_Day"
-    elif pipeline_mode == "train":
-        folders = ["Library_01_Day", "Sports_complex_01_Day", "Mountain_01_Day"]
-    else:
-        raise ValueError(f"Unknown PIPELINE_MODE={pipeline_mode}")
+    folders_env = os.getenv("PREPROCESS_FOLDERS")
+    if not folders_env:
+        raise EnvironmentError("PREPROCESS_FOLDERS environment variable not set.")
+
+    folders = [f.strip() for f in folders_env.split(",")]
 
     counter = 0
     for folder in folders:

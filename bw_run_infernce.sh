@@ -15,7 +15,7 @@
 source venv/bin/activate
 module load devel/cuda/12.8
 
-export HERCULES_DATASET=$(ws_find hercules_dataset)
+export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
 echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"
@@ -28,6 +28,8 @@ export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output
 export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs
 export PIPELINE_MODE="inference"
+
+export PREPROCESS_FOLDERS="Sports_complex_03_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
