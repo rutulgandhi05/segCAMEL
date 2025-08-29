@@ -33,10 +33,10 @@ export PREPROCESS_FOLDERS="sports_complex_03_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_PROCESSED/28082025_1348_segcamel_train_output/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
 
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/28082025_1348_segcamel_train_output/
-cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/28082025_1348_segcamel_train_output/
+cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output/
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output/
