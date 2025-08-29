@@ -240,14 +240,14 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         ))
 
     # Fresh ZIP each run (no resume): zip_mode="w"
-    results, accum = segment_dataset(
+    out = segment_dataset(
         INFER_DIR,
         centroids=centroids,
         smoothing_iters=SMOOTH_ITERS,
         neighbor_range=NEIGHBOR_RANGE,
         min_component=MIN_COMPONENT,
         per_frame_hook=None,
-        collect_metrics=False,
+        collect_metrics=False,             # keep fast path; will return ONLY results
         device=DEVICE,
         assign_chunk=ASSIGN_CHUNK,
         feature_cfg=FEATURE_CFG,
@@ -270,6 +270,13 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         # new mode-specific args
         **seg_kwargs,
     )
+
+    # Handle both return signatures (with/without metrics)
+    if isinstance(out, tuple):
+        results, accum = out
+    else:
+        results, accum = out, None
+
     proc = len(results)                      # processed frames (incl. empties)
     written = _zip_entries_count(ZIP_PATH)   # actually saved (non-empty only)
     skipped = max(0, proc - written)         # empties skipped by the pipeline
@@ -279,6 +286,9 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
     return accum
 
 def _compute_metrics(accum):
+    if accum is None:
+        print("[segment_once] Metrics disabled (collect_metrics=False); skipping CSV.")
+        return
     print("[segment_once] Computing metrics CSV…")
     evaluate_accumulated_metrics(
         accum,
