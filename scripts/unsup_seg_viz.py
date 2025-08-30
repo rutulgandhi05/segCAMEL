@@ -8,8 +8,8 @@ import zipfile
 # ==============================
 # EDIT THESE CONSTANTS
 # ==============================
-INFER_DIR  = Path("data/28082025_1348_segcamel_train_output/28082025_2002_inference_output")
-OUT_DIR    = Path("data/28082025_1348_segcamel_train_output/28082025_2002_unsup_outputs")
+INFER_DIR  = Path("data/29082025_1140_segcamel_train_output_epoch_50/29082025_1759_inference_output")
+OUT_DIR    = Path("data/29082025_1140_segcamel_train_output_epoch_50/29082025_1759_unsup_outputs")
 K          = 10  # used for palette sizing only
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
@@ -17,10 +17,10 @@ PREFER_ZIP = True                           # prefer reading labels from ZIP if 
 
 #   "labels" -> export saved labels to PLY and/or PNG (no interactive window)
 #   "o3d"    -> interactive Open3D viewer
-VIEW_MODE = "labels"  # "labels" or "o3d"
+VIEW_MODE = "o3d"  # "labels" or "o3d"
 
 # Exports (only used in VIEW_MODE="labels")
-SAVE_PLY = True
+SAVE_PLY = False
 SAVE_PNG = False
 PLY_LIMIT: Optional[int] = None  # set to an int to cap number of exported frames
 PNG_W, PNG_H = 1600, 1200

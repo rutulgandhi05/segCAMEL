@@ -38,5 +38,5 @@ cp --verbose $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/ch
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output/
-cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output/
+cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/

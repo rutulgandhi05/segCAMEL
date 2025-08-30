@@ -387,10 +387,12 @@ def train(
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
                 if batch["coord"].numel() == 0:
+                    print(f"[ERROR][Batch {batch_idx}] Empty coord tensor, skipping batch")
                     skipped_batches += 1; continue
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
+                    print(f"[ERROR][Batch {batch_idx}] Empty mask tensor, skipping batch")
                     skipped_batches += 1; continue
                 idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
@@ -423,6 +425,7 @@ def train(
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in input_feat, skipping batch")
                     skipped_batches += 1; continue
                 if input_feat.numel() == 0:
+                    print(f"[ERROR][Batch {batch_idx}] input_feat is empty, skipping batch")
                     skipped_batches += 1; continue
 
                 data_dict = {
