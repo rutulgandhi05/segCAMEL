@@ -43,16 +43,67 @@ def _disk_writer(save_queue: Queue):
             save_queue.task_done()
 
 
-def _safe_outpath(base_dir: Path, stem: int | str) -> Path:
-    p = base_dir / f"{stem}.pth"
+def _safe_outpath(base_dir: Path, stem: int | str, suffix: str = ".pth") -> Path:
+    p = base_dir / f"{stem}{suffix}"
     if not p.exists():
         return p
     k = 1
     while True:
-        q = base_dir / f"{stem}_{k}.pth"
+        q = base_dir / f"{stem}_{k}{suffix}"
         if not q.exists():
             return q
         k += 1
+
+
+def _safe_stem_from_rel(relpath) -> str:
+    try:
+        s = Path(str(relpath)).stem
+        return s
+    except Exception:
+        return ""
+
+
+@torch.no_grad()
+def _visible_first_voxel_select(
+    xyz: torch.Tensor,
+    vis_mask: torch.Tensor,
+    voxel_size: float,
+    origin: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """
+    Pick ONE point per voxel, preferring points with vis_mask==True. Returns indices into xyz.
+    All ops run on CPU for simplicity/reliability (data is small relative to frame).
+    """
+    if xyz.numel() == 0:
+        return torch.empty((0,), dtype=torch.long)
+
+    x = xyz.detach().cpu().to(torch.float32)
+    v = vis_mask.detach().cpu().to(torch.bool).view(-1)
+
+    if origin is None:
+        origin = x.min(dim=0, keepdim=True).values  # (1,3)
+    else:
+        origin = origin.view(1, 3).to(x.dtype)
+
+    g = torch.floor((x - origin) / max(voxel_size, 1e-8)).to(torch.int64)  # (N,3), non-negative
+    # Build a unique voxel key: key = x*(Ymax*Zmax) + y*Zmax + z
+    max_vals = g.max(dim=0).values + 1
+    max_vals = torch.clamp(max_vals, min=1)
+    M_yz = max_vals[1] * max_vals[2]
+    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]  # (N,)
+
+    # Prefer visible points: sort by (key, flag) where flag=0 for visible else 1
+    flag = (~v).to(torch.int64)
+    composite = key * 2 + flag
+    perm = torch.argsort(composite, stable=True)
+
+    key_sorted = key[perm]
+    first_mask = torch.ones_like(key_sorted, dtype=torch.bool)
+    first_mask[1:] = key_sorted[1:] != key_sorted[:-1]
+
+    first_sorted = perm[first_mask]         # indices into original array (after sort)
+    sel = first_sorted.sort().values        # keep original order
+    return sel.to(torch.long)
 
 
 @torch.no_grad()
@@ -69,20 +120,20 @@ def preprocess_and_save_hercules(
     bilinear: bool = False,          # bilinear sampling on the token lattice
     occlusion_eps: float = 0.05,     # >0 enables front-most filtering per token (meters in camera Z)
     save_uv: bool = False,           # save per-point projected (u,v) for debugging
-    # NEW: geometry tightening
+    # Geometry tightening
     border_margin_px: int = 2,       # drop points that land within N px of the image border
     range_aware_occl: bool = True,   # make occlusion eps increase with distance
     occl_eps_per_m: float = 0.001,   # eps ≈ occl_eps_per_m * range (meters)
     occl_eps_min: float = 0.05,      # clamp lower
     occl_eps_max: float = 0.20,      # clamp upper
+    export_train_vox: bool = True,
+    train_voxel_size: float = 0.10,  # typical outdoor training voxel
 ):
     """
     Extract DINO features for each image, project onto LiDAR points, and save per-frame dumps.
 
-    Updates:
-      • border_margin_px: masks out points whose projection is too close to image edges
-      • range_aware_occl: per-point occlusion epsilon (fallback to scalar if projector
-        does not accept tensor occlusion_eps; in that case we use the median).
+    Also writes a compact training file per frame (*_trainvox.pth) with one point per voxel,
+    preferring visible points, to make training batches robust (no more "empty mask" skips).
     """
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
@@ -179,7 +230,7 @@ def preprocess_and_save_hercules(
                 patch_features=patch_feats_flat,  # accepts (Hf*Wf, D) or (Hf,Wf,D)
             )
 
-            # --- NEW: compute per-point, range-aware occlusion eps (with safe fallback) ---
+            # --- per-point, range-aware occlusion eps (with safe fallback) ---
             if range_aware_occl:
                 r = torch.linalg.norm(xyz.to(torch.float32), dim=1)                  # (N,)
                 eps_vec = torch.clamp(occl_eps_per_m * r, min=occl_eps_min, max=occl_eps_max)
@@ -204,8 +255,7 @@ def preprocess_and_save_hercules(
                     occlusion_eps=occlusion_eps,
                 )
 
-            # --- NEW: border margin suppression (drop projections too close to image edges) ---
-            # We apply this as an additional visibility mask AND zero the features there.
+            # --- border margin suppression (drop projections too close to image edges) ---
             if border_margin_px and border_margin_px > 0:
                 try:
                     uvs, _, _ = projector.project_points(xyz.to(torch.float32))
@@ -213,14 +263,12 @@ def preprocess_and_save_hercules(
                     v = uvs[:, 1]
                     in_bounds = (u >= border_margin_px) & (u < (img_w - border_margin_px)) & \
                                 (v >= border_margin_px) & (v < (img_h - border_margin_px))
-                    # combine with projector visibility
                     vis_mask = vis_mask & in_bounds.to(vis_mask.device)
                     # zero out features for suppressed points (keeps array sizes aligned)
                     if point_feats is not None and point_feats.numel() == xyz.shape[0] * point_feats.shape[1]:
                         point_feats = point_feats.clone()
                         point_feats[~vis_mask] = 0.0
                 except Exception:
-                    # If projector.project_points is unavailable, just keep vis_mask as-is
                     pass
 
             if frame_counter % 50 == 0:
@@ -231,7 +279,6 @@ def preprocess_and_save_hercules(
             uv_payload = None
             if save_uv:
                 try:
-                    # Reuse last-computed uvs if available, else compute
                     if 'uvs' not in locals():
                         uvs, _, _ = projector.project_points(xyz.to(torch.float32))
                     uv_payload = uvs.detach().cpu()
@@ -239,8 +286,10 @@ def preprocess_and_save_hercules(
                     uv_payload = None
 
             lid_ts = int(stamps[b][0]) if stamps is not None else frame_counter
-            out_path = _safe_outpath(save_dir, lid_ts)
+            stem = lid_ts
 
+            # ---- Standard dense dump (unchanged behavior) ----
+            out_path = _safe_outpath(save_dir, stem, suffix=".pth")
             payload = {
                 "coord": xyz.float().cpu(),               # (N,3)
                 "feat": feats.float().cpu(),              # (N,F)
@@ -256,12 +305,42 @@ def preprocess_and_save_hercules(
                 "image_relpath": rels[b] if rels is not None else None,
                 "used_camera": cams[b] if cams is not None else None,
             }
-
             if save_uv and uv_payload is not None:
                 payload["proj_uv"] = uv_payload  # (N,2)
-
-            assert "image_tensor" not in payload
             save_queue.put((out_path, payload))
+
+            if export_train_vox:
+                try:
+                    sel = _visible_first_voxel_select(
+                        xyz=xyz,
+                        vis_mask=vis_mask,
+                        voxel_size=float(train_voxel_size),
+                        origin=None,  # per-frame min origin
+                    )
+                    if sel.numel() > 0:
+                        vox_coord = xyz.index_select(0, sel).float().cpu()
+                        vox_feat  = feats.index_select(0, sel).float().cpu()
+                        vox_mask  = vis_mask.index_select(0, sel).cpu()
+                        vox_dino  = point_feats.index_select(0, sel).half().cpu()
+
+                        trainvox_payload = {
+                            "vox_coord": vox_coord,         # (M,3)
+                            "vox_feat":  vox_feat,          # (M,F)
+                            "vox_mask":  vox_mask,          # (M,)
+                            "vox_dino":  vox_dino,          # (M,D)
+                            "grid_size": torch.tensor(float(train_voxel_size)),
+                            "lidar_stem": str(stem),
+                            "image_stem": _safe_stem_from_rel(rels[b]) if rels is not None else "",
+                            "image_relpath": rels[b] if rels is not None else None,
+                            "used_camera": cams[b] if cams is not None else None,
+                            "timestamps": stamps[b] if stamps is not None else None,
+                        }
+                        trainvox_path = _safe_outpath(save_dir, stem, suffix="_trainvox.pth")
+                        save_queue.put((trainvox_path, trainvox_payload))
+                except Exception as e:
+                    # Do not fail the whole preprocessing if trainvox export hiccups
+                    print(f"[WARN][trainvox] {stem}: {e}")
+
             frame_counter += 1
 
         # free per-batch GPU mem
@@ -295,7 +374,6 @@ def preprocess_and_save_hercules(
 if __name__ == "__main__":
     data_root = os.getenv("TMP_HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
-    pipeline_mode = os.getenv("PIPELINE_MODE")  # default to "inference"
     if not data_root:
         raise EnvironmentError("HERCULES_DATASET environment variable not set.")
     if not save_dir:
@@ -326,12 +404,13 @@ if __name__ == "__main__":
             bilinear=False,
             occlusion_eps=0.05,         # used if range_aware_occl=False or as fallback
             save_uv=False,
-            # NEW defaults:
             border_margin_px=2,
             range_aware_occl=True,
-            occl_eps_per_m=0.001,
-            occl_eps_min=0.05,
+            occl_eps_per_m=0.0015,
+            occl_eps_min=0.03,
             occl_eps_max=0.20,
+            export_train_vox= True,
+            train_voxel_size=0.10,
         )
 
     print(f"[PREPROC] Total frames processed: {counter}")

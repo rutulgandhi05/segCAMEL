@@ -2,8 +2,7 @@ import os
 import math
 from pathlib import Path
 from tqdm import tqdm
-from typing import Optional, Tuple
-from functools import partial
+from typing import Optional
 import random
 import numpy as np
 
@@ -18,192 +17,179 @@ import torch.multiprocessing as mp
 try:
     mp.set_start_method("spawn", force=True)
 except RuntimeError:
-    print("Spawn method already set or not available, using default.")
     pass
 
 
-def safe_grid_coord(coord: torch.Tensor, grid_size, *, origin: Optional[torch.Tensor] = None) -> torch.Tensor:
+def _safe_grid_coord(coord: torch.Tensor, grid_size: float, origin: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Build integer voxel coordinates from RAW coords (not normalized).
-    grid_size: float or 0-D tensor
     origin: if provided (3,), use it as min; else compute per-sample min().
     """
-    if not torch.is_tensor(grid_size):
-        grid_size = torch.tensor(grid_size, device=coord.device, dtype=coord.dtype)
-    else:
-        grid_size = grid_size.to(device=coord.device, dtype=coord.dtype)
-
     if origin is None:
         origin = coord.min(dim=0, keepdim=True).values
     else:
-        origin = origin.to(coord.device, coord.dtype).view(1, 3)
-
-    grid = torch.floor((coord - origin) / (grid_size + 1e-8)).to(torch.int32)
-    return grid
-
-
-class PointCloudDataset(torch.utils.data.Dataset):
-    def __init__(self, root_dir: Path, voxel_size: float):
-        self.files = sorted(list(Path(root_dir).glob("*.pth")))
-        if not self.files:
-            raise FileNotFoundError(f"No .pth files found in {root_dir}")
-        self.voxel_size = voxel_size
-
-    def __len__(self):
-        return len(self.files)
-
-    def __getitem__(self, idx):
-        f = self.files[idx]
-        rec = torch.load(f, map_location="cpu")
-
-        coord = rec["coord"]                   # (N,3) float32
-        feat  = rec.get("feat", torch.empty((coord.shape[0], 0), dtype=coord.dtype))
-        mask  = rec.get("mask", torch.ones((coord.shape[0],), dtype=torch.bool))
-        if mask.dtype != torch.bool:
-            mask = mask.to(torch.bool)
-
-        # voxel grid (compute here for robustness, even if present in file)
-        gsize = self.voxel_size if self.voxel_size is not None else float(rec.get("grid_size", 0.1))
-        grid_coord = safe_grid_coord(coord, gsize)
-
-        # robust image stem (may be None or missing)
-        img_rel = rec.get("image_relpath", None)
-        if isinstance(img_rel, (str, Path)) and str(img_rel):
-            image_stem = Path(str(img_rel)).stem
-        else:
-            image_stem = ""
-
-        out = {
-            "coord": coord,                         # (N,3) float32
-            "feat": feat,                           # (N,F) float32
-            "mask": mask,                           # (N,) bool
-            "grid_size": torch.tensor(float(gsize)),
-            "grid_coord": grid_coord,               # (N,3) int32
-            "lidar_stem": f.stem,
-            "image_stem": image_stem,
-        }
-        if "dino_feat" in rec:
-            out["dino_feat"] = rec["dino_feat"]     # (N,D) fp16/float32 OK
-        return out
+        origin = origin.view(1, 3).to(coord.device, coord.dtype)
+    g = torch.floor((coord - origin) / (grid_size + 1e-8)).to(torch.int32)
+    return g
 
 
-def _unique_first(indices_3d: torch.Tensor) -> torch.Tensor:
+def _visible_first_voxel_select(
+    xyz: torch.Tensor, vis_mask: torch.Tensor, voxel_size: float, origin: Optional[torch.Tensor] = None
+) -> torch.Tensor:
     """
-    Return indices of the FIRST occurrence of each unique 3D voxel row in the ORIGINAL order,
-    without using torch.unique(..., return_index=...).
-    Assumes indices_3d are non-negative (true for (coord - min)/voxel_size).
+    Fallback selector (only used if *_trainvox.pth is unavailable).
+    Picks ONE point per voxel, preferring vis_mask==True. CPU-safe, stable order.
     """
-    if indices_3d.numel() == 0:
+    if xyz.numel() == 0:
         return torch.empty((0,), dtype=torch.long)
 
-    g = indices_3d.to(torch.int64).contiguous()  # (N, 3)
-    max_vals = g.max(dim=0).values + 1           # (3,)
+    x = xyz.detach().cpu().to(torch.float32)
+    v = vis_mask.detach().cpu().to(torch.bool).view(-1)
+
+    if origin is None:
+        origin = x.min(dim=0, keepdim=True).values
+    else:
+        origin = origin.view(1, 3).to(x.dtype)
+
+    g = torch.floor((x - origin) / max(float(voxel_size), 1e-8)).to(torch.int64)  # (N,3)
+    max_vals = g.max(dim=0).values + 1
     max_vals = torch.clamp(max_vals, min=1)
     M_yz = max_vals[1] * max_vals[2]
-    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]  # (N,)
+    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]
 
-    perm = torch.argsort(key, stable=True)
+    # prefer visible points: sort by (key, flag) where flag=0 for visible else 1
+    flag = (~v).to(torch.int64)
+    composite = key * 2 + flag
+    perm = torch.argsort(composite, stable=True)
+
     key_sorted = key[perm]
-
     first_mask = torch.ones_like(key_sorted, dtype=torch.bool)
     first_mask[1:] = key_sorted[1:] != key_sorted[:-1]
 
-    first_sorted = perm[first_mask]            # first occurrences in sorted order
-    sel = first_sorted.sort().values           # back to ascending ORIGINAL indices
-    return sel
+    first_sorted = perm[first_mask]
+    sel = first_sorted.sort().values
+    return sel.to(torch.long)
 
 
-def _multiscale_voxel_select(
-    coord: torch.Tensor,
-    grid_sizes: Tuple[float, float, float] = (0.05, 0.10, 0.20),
-    r_bins: Tuple[float, float] = (30.0, 70.0),
-) -> torch.Tensor:
+# ----------------------------
+# Dataset (train on *_trainvox.pth)
+# ----------------------------
+class TrainVoxDataset(torch.utils.data.Dataset):
     """
-    Distance-aware voxel selection:
-      - near (<= r_bins[0])    : small voxels (e.g., 5 cm)
-      - mid  (r0, <= r_bins[1]): medium voxels (e.g., 10 cm)
-      - far  (> r_bins[1])     : large voxels (e.g., 20 cm)
-    Returns a 1-D index tensor selecting one point per voxel per bin.
+    Preferred path: loads compact visible-first voxel tables created in preprocess.py.
+    If not found, falls back to dense *.pth and performs visible-first selection on the fly.
     """
-    if coord.numel() == 0:
-        return torch.empty((0,), dtype=torch.long)
+    def __init__(self, root_dir: Path, fallback_voxel_size: float = 0.10):
+        self.root_dir = Path(root_dir)
+        self.files = sorted(self.root_dir.glob("*_trainvox.pth"))
+        self.fallback_files = []
+        self.fallback_voxel_size = float(fallback_voxel_size)
 
-    r_xy = torch.linalg.norm(coord[:, :2], dim=1)
+        if not self.files:
+            # Fallback to dense files (slower, but keeps training usable)
+            self.fallback_files = sorted(self.root_dir.glob("*.pth"))
+            self.fallback_files = [f for f in self.fallback_files if not f.name.endswith("_trainvox.pth")]
+            if not self.fallback_files:
+                raise FileNotFoundError(f"No *_trainvox.pth or dense .pth files found in {root_dir}")
 
-    near_mask = r_xy <= r_bins[0]
-    mid_mask  = (r_xy > r_bins[0]) & (r_xy <= r_bins[1])
-    far_mask  = r_xy > r_bins[1]
+        # probe to validate keys / mode
+        probe_path = self.files[0] if self.files else self.fallback_files[0]
+        rec = torch.load(probe_path, map_location="cpu")
+        self.using_trainvox = "vox_coord" in rec
 
-    sels = []
-    for mask, gsize in zip((near_mask, mid_mask, far_mask), grid_sizes):
-        if mask.any():
-            sub_idx = mask.nonzero(as_tuple=False).squeeze(1)
-            sub_coord = coord.index_select(0, sub_idx)
-            sub_grid = safe_grid_coord(sub_coord, gsize)
-            sel_local = _unique_first(sub_grid)
-            sels.append(sub_idx.index_select(0, sel_local))
+    def __len__(self):
+        return len(self.files) if self.using_trainvox else len(self.fallback_files)
 
-    if len(sels) == 0:
-        return torch.empty((0,), dtype=torch.long)
+    def __getitem__(self, idx):
+        f = self.files[idx] if self.using_trainvox else self.fallback_files[idx]
+        rec = torch.load(f, map_location="cpu")
 
-    sel = torch.cat(sels, dim=0)
-    return sel.sort().values
+        if self.using_trainvox:
+            coord = rec["vox_coord"].to(torch.float32)                     # (M,3)
+            feat  = rec.get("vox_feat", torch.empty((coord.shape[0], 0)))  # (M,F)
+            mask  = rec.get("vox_mask", torch.ones((coord.shape[0],), dtype=torch.bool))
+            dino  = rec.get("vox_dino", None)
+            if dino is None:
+                raise RuntimeError(f"{f.name} is missing 'vox_dino' needed for distillation.")
+            grid_size = float(rec.get("grid_size", 0.10))
+            lidar_stem = rec.get("lidar_stem", Path(f).stem)
+            image_stem = rec.get("image_stem", "")
+
+            grid_coord = _safe_grid_coord(coord, grid_size)
+            out = {
+                "coord": coord, "feat": feat, "mask": mask.to(torch.bool),
+                "grid_coord": grid_coord, "grid_size": torch.tensor(grid_size),
+                "dino_feat": dino,  # (M,D)
+                "lidar_stem": str(lidar_stem), "image_stem": str(image_stem),
+            }
+            return out
+
+        # ---- Fallback path (dense .pth -> visible-first voxel) ----
+        coord = rec["coord"].to(torch.float32)                              # (N,3)
+        feat  = rec.get("feat", torch.empty((coord.shape[0], 0))).to(torch.float32)
+        mask  = rec.get("mask", torch.ones((coord.shape[0],), dtype=torch.bool)).to(torch.bool)
+        dino  = rec.get("dino_feat", None)
+        if dino is None:
+            raise RuntimeError(f"{f.name} is missing 'dino_feat' (dense fallback requires it).")
+
+        sel = _visible_first_voxel_select(coord, mask, self.fallback_voxel_size, origin=None)
+        if sel.numel() == 0:
+            sel = torch.arange(0, 0, dtype=torch.long)
+
+        coord = coord.index_select(0, sel)
+        feat  = feat.index_select(0, sel) if feat.numel() else feat
+        mask  = mask.index_select(0, sel)
+        dino  = dino.index_select(0, sel)
+
+        grid_size = float(self.fallback_voxel_size)
+        grid_coord = _safe_grid_coord(coord, grid_size)
+
+        out = {
+            "coord": coord, "feat": feat, "mask": mask,
+            "grid_coord": grid_coord, "grid_size": torch.tensor(grid_size),
+            "dino_feat": dino,
+            "lidar_stem": Path(f).stem, "image_stem": Path(f).stem,
+        }
+        return out
 
 
-def collate_for_ptv3(batch, *, multiscale_voxel: bool = False):
+def collate_trainvox(batch):
+    """
+    Simple, robust collate: concatenate variable-length samples.
+    """
     collated = {
-        "coord": [], "feat": [], "grid_size": [], "grid_coord": [],
-        "mask": [], "batch": [], "offset": [], "lidar_stems": [], "image_stems": [],
+        "coord": [], "feat": [], "mask": [], "grid_coord": [], "grid_size": [],
+        "dino_feat": [], "batch": [], "offset": [],
+        "lidar_stems": [], "image_stems": [],
     }
-    has_dino_feat = "dino_feat" in batch[0]
-    if has_dino_feat:
-        collated["dino_feat"] = []
-
     offset = 0
-    for batch_id, sample in enumerate(batch):
-        coord = sample["coord"]
-        feat = sample["feat"]
-        grid = sample["grid_coord"]
-        mask = sample["mask"]
-        gsize = float(sample["grid_size"])
-        lidar_stem = sample["lidar_stem"]
-        image_stem = sample["image_stem"]
-
-        if multiscale_voxel:
-            sel = _multiscale_voxel_select(coord, grid_sizes=(0.05, 0.10, 0.20), r_bins=(30.0, 70.0))
-        else:
-            sel = _unique_first(grid)
-
-        if sel.numel() > 0:
-            coord = coord.index_select(0, sel)
-            feat  = feat.index_select(0, sel)
-            grid  = grid.index_select(0, sel)
-            mask  = mask.index_select(0, sel)
-            if has_dino_feat:
-                dino = sample["dino_feat"].index_select(0, sel)
-        else:
-            continue
+    for bid, sample in enumerate(batch):
+        coord = sample["coord"]; feat = sample["feat"]; mask = sample["mask"].to(torch.bool)
+        grid  = sample["grid_coord"]; gsize = float(sample["grid_size"])
+        dino  = sample["dino_feat"]
 
         N = coord.shape[0]
+        if N == 0:
+            continue
+
         collated["coord"].append(coord)
         collated["feat"].append(feat)
+        collated["mask"].append(mask)
         collated["grid_coord"].append(grid)
-        collated["mask"].append(mask if mask.dtype == torch.bool else mask.to(torch.bool))
         collated["grid_size"].append(gsize)
-        collated["lidar_stems"].append(lidar_stem)
-        collated["image_stems"].append(image_stem)
-        collated["batch"].append(torch.full((N,), batch_id, dtype=torch.long))
+        collated["dino_feat"].append(dino)
+
+        collated["batch"].append(torch.full((N,), bid, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
-        if has_dino_feat:
-            collated["dino_feat"].append(dino)
+        collated["lidar_stems"].append(sample.get("lidar_stem", ""))
+        collated["image_stems"].append(sample.get("image_stem", ""))
 
-    for k in ["coord", "feat", "mask", "batch", "grid_coord"]:
+    # concat
+    for k in ["coord", "feat", "mask", "grid_coord", "dino_feat", "batch"]:
         collated[k] = torch.cat(collated[k], dim=0)
-    if has_dino_feat:
-        collated["dino_feat"] = torch.cat(collated["dino_feat"], dim=0)
     collated["grid_size"] = torch.tensor(collated["grid_size"])
-    collated["offset"] = torch.tensor(collated["offset"], dtype=torch.long)
+    collated["offset"]    = torch.tensor(collated["offset"], dtype=torch.long)
     return collated
 
 
@@ -244,8 +230,6 @@ def train(
     pct_start=0.04,
     total_steps=None,
     use_data_parallel=True,
-    voxel_size: float = 0.10,  # outdoor default
-    multiscale_voxel: bool = False,
     feat_mode: str = "rvi"
 ):
     # ---- Reproducibility ----
@@ -260,16 +244,17 @@ def train(
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
+    data_dir = Path(data_dir)
     print(f"Starting training on device: {device}")
     print(f"Training data: {data_dir}")
 
-    dataset = PointCloudDataset(data_dir, voxel_size=voxel_size)
+    dataset = TrainVoxDataset(data_dir, fallback_voxel_size=0.10)
+    using_trainvox = dataset.using_trainvox
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
     print(f"Using {workers} DataLoader workers for training...")
-
-    collate_fn = partial(collate_for_ptv3, multiscale_voxel=multiscale_voxel)
+    print(f"{'Using' if using_trainvox else 'FALLBACK to'} *_trainvox.pth")
 
     dataloader = DataLoader(
         dataset,
@@ -279,7 +264,7 @@ def train(
         pin_memory=True,
         persistent_workers=False,
         prefetch_factor=prefetch_factor,
-        collate_fn=collate_fn,
+        collate_fn=collate_trainvox,
         multiprocessing_context="spawn",
         generator=g,
     )
@@ -287,20 +272,16 @@ def train(
     num_batches = len(dataloader)
     updates_per_epoch = math.ceil(max(1, num_batches) / max(1, accum_steps))
 
-    print(f"Loaded {len(dataset)} preprocessed samples")
+    print(f"Loaded {len(dataset)} training samples")
     print(f"Per-step batch size: {batch_size} | Accum steps: {accum_steps} | "
           f"Effective batch: {batch_size * accum_steps}")
     print(f"Epochs: {epochs} | Batches/epoch: {num_batches} | Updates/epoch: {updates_per_epoch} | Total Steps: {epochs * updates_per_epoch}")
-    if multiscale_voxel:
-        print("Multi-scale voxelization: ON (near=5cm, mid=10cm, far=20cm)")
-    else:
-        print(f"Single voxel size: {voxel_size:.3f} m")
 
     if total_steps:
         epochs = math.ceil(total_steps / updates_per_epoch)
         print(f"Will train for {epochs} epochs to hit ~{total_steps} optimizer steps.")
 
-    # Probe sample + feat_mode selection (robust to missing keys)
+    # Probe sample & feature dims
     probe = dataset[0]
     feat_dim_total = probe["feat"].shape[1]
     col_map = {"r": 0, "v": 1, "i": 2}
@@ -311,18 +292,19 @@ def train(
     input_dim = probe["coord"].shape[1] + len(keep_cols)
 
     if "dino_feat" not in probe:
-        raise RuntimeError("This training pipeline requires 'dino_feat' in preprocessed files for distillation.")
+        raise RuntimeError("Training files must include 'dino_feat' (teacher features) for distillation.")
     dino_dim = probe["dino_feat"].shape[1]
 
     print(f"Using input_dim={input_dim} (feat_mode='{feat_mode}', keep_cols={keep_cols}), dino_dim={dino_dim}")
 
+    # Model + projection head
     model = PointTransformerV3(
         in_channels=input_dim,
-        enable_flash=False,                          # classic attention
+        enable_flash=False,
         enc_patch_size=(256, 256, 256, 256, 256),
         dec_patch_size=(256, 256, 256, 256),
-        enable_rpe=False,                            # optional
-        upcast_attention=True,                       # safer QK numerics
+        enable_rpe=False,
+        upcast_attention=True,
         upcast_softmax=True
     ).to(device)
 
@@ -354,10 +336,12 @@ def train(
     best_loss = float("inf")
     start_epoch = 0
 
-    latest_ckpt_path = Path(output_dir) / "latest_checkpoint.pth"
-    best_ckpt_path = Path(output_dir) / "best_model.pth"
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    latest_ckpt_path = out_dir / "latest_checkpoint.pth"
+    best_ckpt_path = out_dir / "best_model.pth"
 
-    # Resume if latest exists
+    # Optional resume
     if latest_ckpt_path.exists():
         print(f"Resuming from checkpoint: {latest_ckpt_path}")
         checkpoint = torch.load(latest_ckpt_path, map_location=device)
@@ -392,18 +376,21 @@ def train(
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
-                    print(f"[ERROR][Batch {batch_idx}] Empty mask tensor, skipping batch")
+                    # Very rare with visible-first trainvox
+                    if batch_idx % 50 == 0:
+                        print(f"[WARN][Batch {batch_idx}] No visible rows in trainvox; check preprocessing thresholds.")
                     skipped_batches += 1; continue
                 idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
-                coord = batch["coord"].to(device, non_blocking=True)
+                # Move to device
+                coord = batch["coord"].to(device, non_blocking=True).float()
                 feat  = batch["feat"].to(device, non_blocking=True).float()
                 grid_coord = batch["grid_coord"].to(device, non_blocking=True)
                 batch_tensor = batch["batch"].to(device, non_blocking=True)
                 offset = batch["offset"].to(device, non_blocking=True)
                 grid_size_val = float(batch["grid_size"].mean().item())
 
-                # Feature-channel selection (matches feat_mode used for input_dim)
+                # Feature-channel selection
                 cols = {"r": 0, "v": 1, "i": 2}
                 if feat_mode == "none":
                     feat_sel = torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
@@ -411,7 +398,7 @@ def train(
                     keep = [cols[c] for c in feat_mode if c in cols and cols[c] < feat.shape[1]]
                     feat_sel = feat[:, keep] if len(keep) else torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
 
-                # Normalize coord/feat per-batch then concatenate
+                # Normalize coord/feat per-batch; then build input
                 coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
                 if feat_sel.numel() > 0:
                     feat_sel = (feat_sel - feat_sel.mean(dim=0)) / (feat_sel.std(dim=0) + 1e-6)
@@ -420,7 +407,6 @@ def train(
                 if batch_idx == 0:
                     print(f"[Batch 0] input_feat stats: mean={input_feat.mean().item():.4f}, std={input_feat.std().item():.4f}")
 
-                # NaN/Inf guard
                 if torch.isnan(input_feat).any() or torch.isinf(input_feat).any():
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in input_feat, skipping batch")
                     skipped_batches += 1; continue
@@ -445,7 +431,7 @@ def train(
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
                     skipped_batches += 1; continue
 
-                # Distill on visible points only
+                # Distill on visible rows only
                 idx = idx_cpu.to(device, non_blocking=True)
                 pred_valid = pred_proj.index_select(0, idx)
                 dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
@@ -465,7 +451,7 @@ def train(
                     optimizer.zero_grad(set_to_none=True)
                     scheduler.step()
                     update_count += 1
-                    oom_streak = 0  # successful step resets OOM streak
+                    oom_streak = 0
 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
@@ -497,14 +483,12 @@ def train(
                     "pred_valid","dino_valid","loss","loss_raw","idx","idx_cpu","mask_cpu","feat_sel"
                 ]:
                     if var in locals(): del locals()[var]
-                del batch
 
         denom_batches = counted_batches if counted_batches > 0 else 1
         avg_loss = total_loss_raw / denom_batches
         print(f"Avg Loss (per batch) = {avg_loss:.6f} | Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
 
         # ---- Save latest and best checkpoints ----
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
         model_state = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
         head_state = proj_head.module.state_dict() if isinstance(proj_head, torch.nn.DataParallel) else proj_head.state_dict()
 
@@ -518,15 +502,13 @@ def train(
             "best_loss": best_loss
         }
 
-        latest_ckpt_epoch = Path(output_dir) / f"latest_checkpoint_epoch{epoch+1:04d}.pth"
+        latest_ckpt_epoch = out_dir / f"latest_checkpoint_epoch{epoch+1:04d}.pth"
         torch.save(state, latest_ckpt_epoch)
-        latest_ckpt_path = Path(output_dir) / "latest_checkpoint.pth"
         torch.save(state, latest_ckpt_path)
         print(f"Saved: {latest_ckpt_epoch.name} and latest_checkpoint.pth")
 
         if avg_loss < best_loss:
             best_loss = avg_loss
-            best_ckpt_path = Path(output_dir) / "best_model.pth"
             torch.save(state, best_ckpt_path)
             print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
 
@@ -553,7 +535,5 @@ if __name__ == "__main__":
         prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=False,
-        voxel_size=0.10,      # 10 cm voxel size
-        multiscale_voxel=False,
         feat_mode="rvi",
     )
