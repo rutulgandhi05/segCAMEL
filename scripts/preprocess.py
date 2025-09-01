@@ -255,16 +255,31 @@ def preprocess_and_save_hercules(
                     occlusion_eps=occlusion_eps,
                 )
 
-            # --- quick in-image coverage debug every 50 frames ---
-            if frame_counter % 50 == 0:
-                try:
-                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
-                    u, v = uvs[:, 0], uvs[:, 1]
-                    in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+            # --- quick projection/visibility debug + fallback every 50 frames ---
+            try:
+                uvs, z_cam, _ = projector.project_points(xyz.to(torch.float32))
+                u, v = uvs[:, 0], uvs[:, 1]
+                in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+                z_pos = z_cam > 0
+
+                if frame_counter % 50 == 0:
                     cov_img = float(in_img.float().mean().item()) * 100.0
-                    print(f"[PREPROC][dbg] in-image ratio: {cov_img:.2f}%")
-                except Exception:
-                    pass
+                    cov_zpos = float(z_pos.float().mean().item()) * 100.0
+                    # Approximate z-buffer coverage: unique pixel count where in-image & z>0
+                    ui = u.clamp(0, img_w - 1).round().to(torch.long)
+                    vi = v.clamp(0, img_h - 1).round().to(torch.long)
+                    pix = (vi * img_w + ui)[in_img & z_pos]
+                    zbuf_pix = int(pix.unique().numel())
+                    print(f"[PREPROC][dbg] in-image: {cov_img:.2f}% | z>0: {cov_zpos:.2f}% | zbuf_pix≈{zbuf_pix}")
+
+                # ---- Fallback: if occlusion marks everything invisible but we do have in-image points, trust in-image&z>0 ----
+                if vis_mask.sum().item() == 0 and in_img.any().item():
+                    vis_mask = (in_img & z_pos).to(vis_mask.device)
+                    if frame_counter % 50 == 0:
+                        print("[PREPROC][dbg] using in-image-only visibility fallback for this frame.")
+            except Exception:
+                # projection debug is best-effort; ignore errors here
+                pass
 
             # --- border margin suppression (drop projections too close to image edges) ---
             if border_margin_px and border_margin_px > 0:
@@ -306,7 +321,7 @@ def preprocess_and_save_hercules(
                 "coord": xyz.float().cpu(),               # (N,3)
                 "feat": feats.float().cpu(),              # (N,F)
                 "dino_feat": point_feats.half().cpu(),    # (N,D) save fp16 to cut storage
-                "mask": vis_mask.cpu(),                   # (N,) True where Z>0 & in-image (& occlusion-kept)
+                "mask": vis_mask.cpu(),                   # (N,) True where Z>0 & in-image (& occlusion-kept or fallback)
                 "grid_size": torch.tensor(GRID_SIZE),     # scalar
                 # light metadata for future debugging
                 "intrinsics": K.cpu(),
@@ -330,7 +345,7 @@ def preprocess_and_save_hercules(
                         origin=None,  # per-frame min origin
                     )
                     if sel.numel() > 0:
-                        # --- FIX: keep index & tensors on the SAME device, then .cpu() for payload ---
+                        # keep index & tensors on the SAME device, then .cpu() for payload
                         sel_dev = sel.to(xyz.device)
                         vox_coord = xyz.index_select(0, sel_dev).float().cpu()
                         vox_feat  = feats.index_select(0, sel_dev).float().cpu()
@@ -387,7 +402,7 @@ def preprocess_and_save_hercules(
 
 if __name__ == "__main__":
     # Prefer fast local copy on cluster, fall back to network path
-    data_root = os.getenv("TMP_HERCULES_DATASET")
+    data_root = os.getenv("TMP_HERCULES_DATASET") or os.getenv("HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
     if not data_root:
         raise EnvironmentError("TMP_HERCULES_DATASET or HERCULES_DATASET must be set.")
@@ -417,7 +432,7 @@ if __name__ == "__main__":
             prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
             frame_counter=counter,
             bilinear=False,
-            occlusion_eps=0.05,         # used if range_aware_occl=False or as fallback
+            occlusion_eps=0.20,         # <- loosened tolerance (meters)
             save_uv=False,
             border_margin_px=2,
             range_aware_occl=True,
