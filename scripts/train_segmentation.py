@@ -230,9 +230,10 @@ def train(
     pct_start=0.04,
     total_steps=None,
     use_data_parallel=True,
-    feat_mode: str = "rvi"
+    feat_mode: str = "rvi",
+    voxel_size: float = 0.10,
 ):
-    # ---- Reproducibility ----
+    # ---- Repro ----
     torch.use_deterministic_algorithms(False)
     seed = 42
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
@@ -248,13 +249,17 @@ def train(
     print(f"Starting training on device: {device}")
     print(f"Training data: {data_dir}")
 
-    dataset = TrainVoxDataset(data_dir, fallback_voxel_size=0.10)
+    dataset = TrainVoxDataset(data_dir, fallback_voxel_size=voxel_size)
     using_trainvox = dataset.using_trainvox
+
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
     print(f"Using {workers} DataLoader workers for training...")
     print(f"{'Using' if using_trainvox else 'FALLBACK to'} *_trainvox.pth")
+
+    if len(dataset) == 0:
+        raise RuntimeError(f"No training samples found in {data_dir}. Did preprocessing write *_trainvox.pth or dense .pth?")
 
     dataloader = DataLoader(
         dataset,
@@ -272,10 +277,12 @@ def train(
     num_batches = len(dataloader)
     updates_per_epoch = math.ceil(max(1, num_batches) / max(1, accum_steps))
 
-    print(f"Loaded {len(dataset)} training samples")
+    print(f"Loaded {len(dataset)} preprocessed samples")
     print(f"Per-step batch size: {batch_size} | Accum steps: {accum_steps} | "
           f"Effective batch: {batch_size * accum_steps}")
     print(f"Epochs: {epochs} | Batches/epoch: {num_batches} | Updates/epoch: {updates_per_epoch} | Total Steps: {epochs * updates_per_epoch}")
+    if using_trainvox:
+        print(f"Single voxel size: {voxel_size:.3f} m")
 
     if total_steps:
         epochs = math.ceil(total_steps / updates_per_epoch)
@@ -328,8 +335,8 @@ def train(
         epochs=epochs,
         pct_start=pct_start,
         anneal_strategy="cos",
-        div_factor=10,        # initial LR = max_lr / div_factor
-        final_div_factor=100  # final LR = initial / final_div_factor
+        div_factor=10,
+        final_div_factor=100
     )
 
     scaler = GradScaler(enabled=False)
@@ -376,9 +383,10 @@ def train(
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
-                    # Very rare with visible-first trainvox
+                    # Helpful debug once per epoch
                     if batch_idx % 50 == 0:
-                        print(f"[WARN][Batch {batch_idx}] No visible rows in trainvox; check preprocessing thresholds.")
+                        print(f"[WARN][Batch {batch_idx}] All selected points are non-visible after voxel selection. "
+                              f"Consider checking border_margin/occlusion in preprocessing, or voxel size.")
                     skipped_batches += 1; continue
                 idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
@@ -390,7 +398,7 @@ def train(
                 offset = batch["offset"].to(device, non_blocking=True)
                 grid_size_val = float(batch["grid_size"].mean().item())
 
-                # Feature-channel selection
+                # Feature-channel selection (matches feat_mode used for input_dim)
                 cols = {"r": 0, "v": 1, "i": 2}
                 if feat_mode == "none":
                     feat_sel = torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
@@ -451,7 +459,7 @@ def train(
                     optimizer.zero_grad(set_to_none=True)
                     scheduler.step()
                     update_count += 1
-                    oom_streak = 0
+                    oom_streak = 0  # successful step resets OOM streak
 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
@@ -536,4 +544,5 @@ if __name__ == "__main__":
         lr=2e-3,
         use_data_parallel=False,
         feat_mode="rvi",
+        voxel_size=0.10,
     )

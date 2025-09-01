@@ -255,10 +255,22 @@ def preprocess_and_save_hercules(
                     occlusion_eps=occlusion_eps,
                 )
 
+            # --- quick in-image coverage debug every 50 frames ---
+            if frame_counter % 50 == 0:
+                try:
+                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    u, v = uvs[:, 0], uvs[:, 1]
+                    in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+                    cov_img = float(in_img.float().mean().item()) * 100.0
+                    print(f"[PREPROC][dbg] in-image ratio: {cov_img:.2f}%")
+                except Exception:
+                    pass
+
             # --- border margin suppression (drop projections too close to image edges) ---
             if border_margin_px and border_margin_px > 0:
                 try:
-                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    if 'uvs' not in locals():
+                        uvs, _, _ = projector.project_points(xyz.to(torch.float32))
                     u = uvs[:, 0]
                     v = uvs[:, 1]
                     in_bounds = (u >= border_margin_px) & (u < (img_w - border_margin_px)) & \
@@ -318,10 +330,12 @@ def preprocess_and_save_hercules(
                         origin=None,  # per-frame min origin
                     )
                     if sel.numel() > 0:
-                        vox_coord = xyz.index_select(0, sel).float().cpu()
-                        vox_feat  = feats.index_select(0, sel).float().cpu()
-                        vox_mask  = vis_mask.index_select(0, sel).cpu()
-                        vox_dino  = point_feats.index_select(0, sel).half().cpu()
+                        # --- FIX: keep index & tensors on the SAME device, then .cpu() for payload ---
+                        sel_dev = sel.to(xyz.device)
+                        vox_coord = xyz.index_select(0, sel_dev).float().cpu()
+                        vox_feat  = feats.index_select(0, sel_dev).float().cpu()
+                        vox_mask  = vis_mask.index_select(0, sel_dev).cpu()
+                        vox_dino  = point_feats.index_select(0, sel_dev).half().cpu()
 
                         trainvox_payload = {
                             "vox_coord": vox_coord,         # (M,3)
@@ -372,10 +386,11 @@ def preprocess_and_save_hercules(
 
 
 if __name__ == "__main__":
+    # Prefer fast local copy on cluster, fall back to network path
     data_root = os.getenv("TMP_HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
     if not data_root:
-        raise EnvironmentError("HERCULES_DATASET environment variable not set.")
+        raise EnvironmentError("TMP_HERCULES_DATASET or HERCULES_DATASET must be set.")
     if not save_dir:
         raise EnvironmentError("PREPROCESS_OUTPUT_DIR environment variable not set.")
 
@@ -387,7 +402,7 @@ if __name__ == "__main__":
     if not folders_env:
         raise EnvironmentError("PREPROCESS_FOLDERS environment variable not set.")
 
-    folders = [f.strip() for f in folders_env.split(",")]
+    folders = [f.strip() for f in folders_env.split(",") if f.strip()]
 
     counter = 0
     for folder in folders:
@@ -409,7 +424,7 @@ if __name__ == "__main__":
             occl_eps_per_m=0.0015,
             occl_eps_min=0.03,
             occl_eps_max=0.20,
-            export_train_vox= True,
+            export_train_vox=True,
             train_voxel_size=0.10,
         )
 
