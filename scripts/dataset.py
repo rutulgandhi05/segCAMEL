@@ -3,11 +3,10 @@ from pathlib import Path
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor
 import tarfile
-
 import numpy as np
 from tqdm import tqdm
 
-from hercules.aeva import load_aeva_bin  # keep your parser as-is
+from hercules.aeva import load_aeva_bin
 from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
 from utils.misc import find_closest, _resolve_default_workers
@@ -17,7 +16,6 @@ from utils.misc import find_closest, _resolve_default_workers
 # Helpers
 # -----------------------------
 def _safe_K(default_hw=(640, 480)):
-    # Fallback intrinsics if YAML missing or malformed
     fx, fy = float(default_hw[0]), float(default_hw[1])
     cx, cy = float(default_hw[0]) / 2.0, float(default_hw[1]) / 2.0
     return np.array([[fx, 0.0, cx],
@@ -33,15 +31,11 @@ def _load_intrinsics_yaml(file_path: Path):
     if not file_path.exists():
         return _safe_K(), None
 
-    # Try PyYAML first (preferred)
     try:
         import yaml  # type: ignore
         with open(file_path, "r") as f:
             data = yaml.safe_load(f)
 
-        # Common layouts:
-        # - K: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-        # - camera_matrix: { data: [...] }
         if "K" in data:
             kv = np.array(data["K"], dtype=np.float32).reshape(3, 3)
         elif "camera_matrix" in data and "data" in data["camera_matrix"]:
@@ -49,7 +43,6 @@ def _load_intrinsics_yaml(file_path: Path):
         else:
             kv = _safe_K()
 
-        # Distortion optional
         D = None
         for key in ("D", "distortion", "distortion_coefficients"):
             if key in data:
@@ -60,14 +53,11 @@ def _load_intrinsics_yaml(file_path: Path):
         return kv.astype(np.float32), (D if D is not None and D.size > 0 else None)
 
     except Exception:
-        # Very lightweight fallback parser when YAML is unavailable / malformed
+        # minimal fallback parser
         try:
             lines = file_path.read_text().splitlines()
-            # Scan for a line that contains 9 numbers for K
-            def _nums(s): 
-                # split on space or tab
+            def _nums(s):
                 return np.fromstring(s.replace(",", " "), sep=" ", dtype=np.float32)
-
             K = None
             for ln in lines:
                 vals = _nums(ln)
@@ -76,7 +66,6 @@ def _load_intrinsics_yaml(file_path: Path):
                     break
             if K is None:
                 K = _safe_K()
-            # no reliable D in fallback
             return K.astype(np.float32), None
         except Exception:
             return _safe_K(), None
@@ -84,10 +73,7 @@ def _load_intrinsics_yaml(file_path: Path):
 
 def _load_extrinsics_txt(file_path: Path):
     """
-    Parse stereo_lidar.txt by labels, not by line indices.
-    Expected keys (case-insensitive substrings):
-      - 'Tr_lidar_to_leftcam'
-      - 'Tr_lidar_to_rightcam'
+    Parse stereo_lidar.txt by labels (case-insensitive).
     Returns (lidar_to_left_4x4, lidar_to_right_4x4). On failure -> (I, I).
     """
     I = np.eye(4, dtype=np.float32)
@@ -122,7 +108,7 @@ def _first_existing_path(*candidates: Path) -> Path:
     for p in candidates:
         if p.exists():
             return p
-    return candidates[0]  # return first candidate even if missing, so glob() just yields empty
+    return candidates[0]
 
 
 def _glob_images(folder: Path):
@@ -142,17 +128,79 @@ def _int_stem(p: Path):
 
 
 def _extract_if_needed(tar_path: Path, target_dir: Path):
-    """
-    Extract only if target_dir is missing or empty.
-    """
+    """Extract only if target_dir is missing or empty."""
     if not tar_path.exists():
         return
-    
+    if target_dir.exists():
+        has_files = any(target_dir.rglob("*"))
+        if has_files:
+            return
     print(f" [DATASET] Extracting {tar_path} ...")
     target_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tar:
         tar.extractall(path=target_dir)
 
+
+def _safe_load_aeva_bin_xyz(bin_path: Path) -> np.ndarray:
+    """
+    Always return (N,3) float32 xyz from a Hercules Aeva .bin, coping with
+    your load_aeva_bin behavior:
+      - may return a stacked ndarray (N,C) when return_all_fields=True
+      - may return xyz or raise when return_all_fields=False
+      - may (rarely) return a dict or tuple
+    We normalize all cases to (N,3) xyz without raising.
+    """
+    # First try: ask for "all fields" so we reliably get an ndarray (N,C)
+    out = None
+    try:
+        out = load_aeva_bin(bin_path, return_all_fields=True)
+    except Exception:
+        # Fallback: try without the kwarg (older signatures or buggy code paths)
+        try:
+            out = load_aeva_bin(bin_path)
+        except Exception:
+            # Final fallback: give empty (0,3)
+            return np.zeros((0, 3), dtype=np.float32)
+
+    # ndarray case (common with your current implementation)
+    try:
+        arr = np.asarray(out, dtype=np.float32)
+        if arr.ndim == 2 and arr.shape[1] >= 3:
+            return arr[:, :3].astype(np.float32)
+    except Exception:
+        pass
+
+    # dict case (if you ever truly return a dict of fields)
+    if isinstance(out, dict):
+        def _get_any(d, keys):
+            for k in keys:
+                if k in d:
+                    return np.asarray(d[k], dtype=np.float32)
+            return None
+        xs = _get_any(out, ("x", "X", "pos_x"))
+        ys = _get_any(out, ("y", "Y", "pos_y"))
+        zs = _get_any(out, ("z", "Z", "pos_z"))
+        if xs is not None and ys is not None and zs is not None:
+            return np.stack([xs, ys, zs], axis=1).astype(np.float32)
+        # If dict keys are unexpected, try first value’s shape
+        try:
+            cand = np.asarray(next(iter(out.values())), dtype=np.float32)
+            if cand.ndim == 2 and cand.shape[1] >= 3:
+                return cand[:, :3].astype(np.float32)
+        except Exception:
+            pass
+
+    # tuple/list case (e.g., (points, ts))
+    if isinstance(out, (list, tuple)) and len(out) > 0:
+        try:
+            cand = np.asarray(out[0], dtype=np.float32)
+            if cand.ndim == 2 and cand.shape[1] >= 3:
+                return cand[:, :3].astype(np.float32)
+        except Exception:
+            pass
+
+    # Last resort: empty
+    return np.zeros((0, 3), dtype=np.float32)
 
 def _process_hercules_bin(
     bin_path: Path,
@@ -166,8 +214,9 @@ def _process_hercules_bin(
     lidar_to_left_ext: np.ndarray,
     lidar_to_right_ext: np.ndarray,
 ):
-    pc = load_aeva_bin(bin_path, return_all_fields=return_all_fields)
-    if pc is None:
+    # --- robust LiDAR load (always xyz) ---
+    xyz = _safe_load_aeva_bin_xyz(bin_path)
+    if xyz is None or xyz.size == 0:
         return None
 
     ts = int(bin_path.stem)
@@ -192,14 +241,11 @@ def _process_hercules_bin(
         T_used = lidar_to_left_ext
 
     return {
-        "pointcloud": pc,
-        # convenience single-view (matched) fields:
+        "pointcloud": xyz,                   # (N,3) float32
         "image": used_image,
-        "intrinsics": K_used,                  # 3x3 float32
-        "extrinsics": T_used,                  # 4x4 float32 (LiDAR -> used camera)
-        "used_camera": used_camera,            # "right" or "left"
-
-        # keep the original dual-view info too (for debugging / multi-view use):
+        "intrinsics": K_used,               # 3x3 float32
+        "extrinsics": T_used,               # 4x4 float32 (LiDAR -> used camera)
+        "used_camera": used_camera,         # "right" or "left"
         "left_image": l_img,
         "right_image": r_img,
         "timestamps": [ts, l_ts, r_ts],
@@ -213,23 +259,20 @@ def _process_hercules_bin(
 def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, max_workers: int = None):
     """
     Hercules dataset.
-    Returns a list[dict] per LiDAR bin:
-      - pointcloud (np.ndarray)
-      - image (Path)               # matched to used_camera
-      - intrinsics (np.ndarray 3x3)
-      - extrinsics (np.ndarray 4x4)
-      - used_camera ("right"/"left")
-      - left_image / right_image (Path or None)
-      - timestamps [lidar_ts, left_ts, right_ts]
-      - stereo_left_intrinsics / stereo_right_intrinsics (np.ndarray 3x3)
-      - lidar_to_stereo_left_extrinsic / lidar_to_stereo_right_extrinsic (np.ndarray 4x4)
+    Returns a list[dict] per LiDAR bin with:
+      - pointcloud: (N,3) float32 xyz
+      - image: Path (matched to used_camera)
+      - intrinsics: 3x3
+      - extrinsics: 4x4 (LiDAR->Camera, matching used_camera)
+      - used_camera: "right"/"left"
+      - timestamps, plus debug fields
     """
     dataset_folder = Path(dataset_folder)
 
-    # number of workers to use for the ProcessPool
+    # workers
     if max_workers is None:
         max_workers = _resolve_default_workers()
-    max_workers = max(1, int(max_workers))  # Ensure at least one worker
+    max_workers = max(1, int(max_workers))
 
     # --- Extraction (idempotent) ---
     lidar_zip = _first_existing_path(
@@ -265,11 +308,6 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     stereo_left_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_left.yaml")
     stereo_right_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_right.yaml")
     lidar_to_left_ext, lidar_to_right_ext = _load_extrinsics_txt(calib_folder / "stereo_lidar.txt")
-    print(f" [DATASET] Loaded intrinsics and extrinsics from {calib_folder}")
-    print(f"           Left camera K:\n{stereo_left_intr}")
-    print(f"           Right camera K:\n{stereo_right_intr}")
-    print(f"           LiDAR to Left camera extrinsic:\n{lidar_to_left_ext}")
-    print(f"           LiDAR to Right camera extrinsic:\n{lidar_to_right_ext}")
 
     # --- Images ---
     left_images = _glob_images(left_img_folder)
@@ -282,7 +320,6 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
 
     # --- LiDAR files ---
     bin_files = sorted(lidar_folder.glob("*.bin"))
-
     print(f" [DATASET] Found {len(bin_files)} LiDAR files, {len(left_images)} left images, {len(right_images)} right images in {dataset_folder.name}")
 
     process_fn = partial(
@@ -298,7 +335,6 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
         lidar_to_right_ext=lidar_to_right_ext,
     )
 
-    # --- Parallel execution ---
     paired_samples: list[dict] = []
     with ProcessPoolExecutor(max_workers=max_workers) as exe:
         for result in tqdm(exe.map(process_fn, bin_files), total=len(bin_files), desc="Loading & pairing", unit="file"):
@@ -310,16 +346,9 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
 def load_scantinel_dataset_folder(dataset_folder: Path):
     """
     Load paired LiDAR and Camera data from Scantinel dataset folder.
-
-    Args:
-        dataset_folder (Path): Path to the dataset root.
-
-    Returns:
-        list of dicts: Each dict contains 'pointcloud', 'image', 'timestamps', and 'intrinsics'.
     """
-    import tqdm as _tqdm  # local alias to avoid shadowing
+    import tqdm as _tqdm
 
-    # Find all FMCW and Camera MCAP files
     lidar_files = sorted(dataset_folder.glob("*FMCW.mcap"))
     cam_files = sorted(dataset_folder.glob("*CAM.mcap"))
 
@@ -352,7 +381,7 @@ def load_scantinel_dataset_folder(dataset_folder: Path):
         cam = next((msg for msg in cam_data if msg[1] == ts_cam), None)
 
         sample = {
-            "pointcloud": pointcloud,  # shape: (N, 6)
+            "pointcloud": pointcloud,  # (N,6)
             "image": io.BytesIO(cam[0]),
             "intrinsics": intrinsics,
             "timestamps": [ts_lidar.timestamp(), ts_cam.timestamp()],
