@@ -147,11 +147,7 @@ def _extract_if_needed(tar_path: Path, target_dir: Path):
     """
     if not tar_path.exists():
         return
-    if target_dir.exists():
-        # if any files exist, skip
-        has_files = any(target_dir.rglob("*"))
-        if has_files:
-            return
+    
     print(f" [DATASET] Extracting {tar_path} ...")
     target_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tar:
