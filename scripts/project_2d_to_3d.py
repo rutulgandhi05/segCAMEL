@@ -1,52 +1,180 @@
+import math
+from typing import Tuple, Optional, Union
+
 import torch
 import numpy as np
-from typing import Union
+
+
+def _as_4x4(T: torch.Tensor) -> torch.Tensor:
+    """Ensure a 4x4 homogeneous transform (float32, device preserved)."""
+    T = T.to(torch.float32)
+    if T.dim() == 2 and T.shape == (4, 4):
+        return T
+    if T.dim() == 2 and T.shape == (3, 4):
+        out = torch.eye(4, dtype=torch.float32, device=T.device)
+        out[:3, :4] = T
+        return out
+    raise ValueError(f"Extrinsic must be (4,4) or (3,4); got {tuple(T.shape)}")
+
+
+def _K_params(K: torch.Tensor):
+    """Extract fx, fy, cx, cy from a 3x3 intrinsics matrix."""
+    K = K.to(torch.float32)
+    if K.dim() != 2 or K.shape != (3, 3):
+        raise ValueError(f"Intrinsic must be 3x3; got {tuple(K.shape)}")
+    return float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])
 
 
 class LidarToImageProjector:
-    def __init__(self, intrinsic, extrinsic, image_size, feature_map_size, patch_features):
-        """
-        intrinsic: (3,3) torch.float32
-        extrinsic: (4,4) torch.float32  (camera_T_lidar; transforms LiDAR -> camera)
-        image_size: (W, H) in pixels after TransformFactory resize
-        feature_map_size: (Wf, Hf) token lattice size from TransformFactory
-        patch_features: (Hf*Wf, D) or (Hf, Wf, D) features (torch.float32/float16)
-        """
-        self.K = intrinsic
-        self.T = extrinsic
-        self.W, self.H = image_size
-        self.Wf, self.Hf = feature_map_size
-        self.features = patch_features
-        if self.features.dim() == 2:
-            self.features = self.features.view(self.Hf, self.Wf, -1).contiguous()
-        self.D = self.features.shape[-1]
+    """
+    Projects LiDAR XYZ into camera image & token lattice and assigns 2D patch features to 3D points.
 
-        # pixel size of a token cell (assumes uniform grid)
-        self.patch_w = float(self.W) / float(self.Wf)
-        self.patch_h = float(self.H) / float(self.Hf)
+    Fixes included:
+      - Safe UV init (uvs=-1 for behind-camera points) to avoid bogus in-image hits.
+      - One-time auto-orientation: choose T vs inv(T) by which yields more (in-image & z>0).
+      - Token z-buffer via scatter_reduce_('amin') with a NumPy fallback.
+      - Fallback feature sampler that ignores occlusion (for preprocess fallback path).
+    """
 
-    def project_points(self, lidar_xyz):
+    def __init__(
+        self,
+        intrinsic: torch.Tensor,            # (3,3)
+        extrinsic: torch.Tensor,            # (4,4) or (3,4); nominal LiDAR->Camera
+        image_size: Tuple[int, int],        # (W, H) after any resize done for DINO
+        feature_map_size: Tuple[int, int],  # (Wf, Hf) DINO token grid
+        patch_features: torch.Tensor,       # (Hf*Wf, D) OR (Hf, Wf, D)
+        device: Optional[torch.device] = None,
+    ):
+        if device is None:
+            device = intrinsic.device
+        self.device = device
+
+        # Intrinsics
+        self.K = intrinsic.to(device=device, dtype=torch.float32)
+        self.fx, self.fy, self.cx, self.cy = _K_params(self.K)
+
+        # Extrinsics (store both directions; pick one after probing)
+        self.T_nom = _as_4x4(extrinsic.to(device=device))
+        self.T_inv = torch.linalg.inv(self.T_nom)
+        self._checked_orientation = False
+        self._use_inv = False  # False => use T_nom; True => use T_inv
+
+        # Image & token sizes
+        W, H = image_size
+        self.img_w = int(W)
+        self.img_h = int(H)
+
+        Wf, Hf = feature_map_size
+        self.Wf = int(Wf)
+        self.Hf = int(Hf)
+
+        # Token cell size in pixels
+        self.patch_w = float(self.img_w) / max(1.0, float(self.Wf))
+        self.patch_h = float(self.img_h) / max(1.0, float(self.Hf))
+
+        # Features as (Hf, Wf, D) float32
+        if patch_features.dim() == 3 and patch_features.shape[0] == self.Hf and patch_features.shape[1] == self.Wf:
+            feats = patch_features
+        elif patch_features.dim() == 2 and patch_features.shape[0] == self.Hf * self.Wf:
+            feats = patch_features.view(self.Hf, self.Wf, -1)
+        else:
+            raise ValueError(
+                f"patch_features must be (Hf,Wf,D) or (Hf*Wf,D); got {tuple(patch_features.shape)} "
+                f"with Hf={self.Hf},Wf={self.Wf}"
+            )
+        self.features = feats.to(device=self.device, dtype=torch.float32).contiguous()
+        self.D = int(self.features.shape[-1])
+
+        # Small epsilon to avoid div by zero
+        self._eps = 1e-8
+
+    # --------------------- core transforms ---------------------
+    def _transform(self, xyz: torch.Tensor, use_inv: bool) -> torch.Tensor:
+        """Apply chosen extrinsic: LiDAR->Camera = (R|t) * [x;y;z;1]."""
+        T = self.T_inv if use_inv else self.T_nom
+        N = xyz.shape[0]
+        ones = torch.ones((N, 1), device=xyz.device, dtype=xyz.dtype)
+        homog = torch.cat([xyz, ones], dim=1)   # (N,4)
+        cam = (homog @ T.T)[:, :3]              # (N,3)
+        return cam
+
+    def _project_xy(self, Xc: torch.Tensor):
+        """Project camera-frame 3D points to pixel coords (float)."""
+        z = Xc[:, 2]
+        x = Xc[:, 0]
+        y = Xc[:, 1]
+        # avoid div by zero; keep sign for z>0 test
+        z_safe = torch.where(z.abs() > self._eps, z, torch.sign(z) * self._eps + (z == 0) * self._eps)
+        u = self.fx * (x / z_safe) + self.cx
+        v = self.fy * (y / z_safe) + self.cy
+        return u, v, z
+
+    def _auto_choose_orientation(self, xyz: torch.Tensor):
+        """Pick T vs T^-1 by which yields more (in-image & z>0) for a subset (first frame)."""
+        if self._checked_orientation:
+            return
+        with torch.no_grad():
+            subset = xyz
+            if subset.shape[0] > 5000:
+                step = max(1, subset.shape[0] // 5000)
+                subset = subset[::step]
+
+            # Try nominal
+            Xc_nom = self._transform(subset, use_inv=False)
+            u_nom, v_nom, z_nom = self._project_xy(Xc_nom)
+            in_nom = (u_nom >= 0) & (u_nom < self.img_w) & (v_nom >= 0) & (v_nom < self.img_h) & (z_nom > 0)
+            score_nom = int(in_nom.sum().item())
+
+            # Try inverse
+            Xc_inv = self._transform(subset, use_inv=True)
+            u_inv, v_inv, z_inv = self._project_xy(Xc_inv)
+            in_inv = (u_inv >= 0) & (u_inv < self.img_w) & (v_inv >= 0) & (v_inv < self.img_h) & (z_inv > 0)
+            score_inv = int(in_inv.sum().item())
+
+            self._use_inv = score_inv > score_nom
+            self._checked_orientation = True
+            # Optional debug:
+            # print(f"[Projector] orientation = {'T_inv' if self._use_inv else 'T_nom'} "
+            #       f"(scores: nom={score_nom}, inv={score_inv})")
+
+    # --------------------- public API ---------------------
+    @torch.no_grad()
+    def project_points(self, lidar_xyz: torch.Tensor):
         """
-        lidar_xyz: (N,3) in LiDAR frame
         Returns:
-          uvs: (N,2) pixel coords in the resized image
-          in_front: (N,) bool (Z_cam > 0)
-          depth: (N,) float (Z_cam)
+          uvs: (N,2) pixel coords (float). Behind-camera points are set to (-1, -1).
+          z_cam: (N,) depth in camera Z (can be negative).
+          valid_mask: (N,) True if in-image & z>0 (NO occlusion applied here).
         """
-        N = lidar_xyz.shape[0]
-        ones = torch.ones((N, 1), device=lidar_xyz.device, dtype=lidar_xyz.dtype)
-        lidar_homo = torch.cat([lidar_xyz, ones], dim=1)  # [N,4]
-        cam_xyz = (self.T @ lidar_homo.T).T[:, :3]        # [N,3]
-        depth = cam_xyz[:, 2]
-        in_front = depth > 0
-        cam_pts = cam_xyz[in_front]
-        pix = (self.K @ cam_pts.T).T
-        uvs = torch.empty((N, 2), device=lidar_xyz.device, dtype=lidar_xyz.dtype)
-        uvs[in_front] = pix[:, :2] / pix[:, 2:3]
-        # for points not in_front, uvs are left uninitialized; always mask them via in_front
-        return uvs, in_front, depth
+        xyz = lidar_xyz.to(device=self.device, dtype=torch.float32)
 
-    def _sample_bilinear(self, u, v):
+        # Choose orientation on first call
+        if not self._checked_orientation:
+            self._auto_choose_orientation(xyz)
+
+        Xc = self._transform(xyz, use_inv=self._use_inv)
+        u, v, z = self._project_xy(Xc)
+
+        # Safe UV init: mark all as invalid by default
+        uvs = torch.full((xyz.shape[0], 2), -1.0, dtype=torch.float32, device=self.device)
+        in_front = z > 0
+        if in_front.any():
+            uvs[in_front, 0] = u[in_front]
+            uvs[in_front, 1] = v[in_front]
+
+        in_img = (uvs[:, 0] >= 0) & (uvs[:, 0] < self.img_w) & (uvs[:, 1] >= 0) & (uvs[:, 1] < self.img_h)
+        valid = in_front & in_img
+
+        return uvs, z, valid
+
+    # --------------------- feature assignment ---------------------
+    def _token_indices_from_uv(self, u: torch.Tensor, v: torch.Tensor):
+        """Map pixel coords (float) to nearest-token integer indices (i,j) on (Hf,Wf)."""
+        j = torch.clamp((u / self.patch_w).floor().to(torch.int64), 0, self.Wf - 1)  # x-index (cols)
+        i = torch.clamp((v / self.patch_h).floor().to(torch.int64), 0, self.Hf - 1)  # y-index (rows)
+        return i, j
+
+    def _sample_bilinear(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """
         Bilinear sampling on token lattice. u,v are pixel coords (valid in-bounds).
         Returns features (M,D) for the selected subset.
@@ -65,7 +193,6 @@ class LidarToImageProjector:
         wj0 = 1.0 - wj1
         wi0 = 1.0 - wi1
 
-        # gather 4 corners
         F = self.features  # (Hf, Wf, D)
         f00 = F[i0, j0]    # top-left
         f01 = F[i0, j1]    # top-right
@@ -80,6 +207,39 @@ class LidarToImageProjector:
         return f00 * w00 + f01 * w01 + f10 * w10 + f11 * w11  # (M,D)
 
     @torch.no_grad()
+    def sample_features_simple(
+        self,
+        lidar_xyz: torch.Tensor,
+        *,
+        bilinear: bool = False,
+    ):
+        """
+        Assign features ignoring occlusion (used as a fallback).
+        Returns:
+          point_feats: (N,D) float32
+          mask_img_zpos: (N,) bool (in-image & z>0)
+        """
+        N = lidar_xyz.shape[0]
+        device = lidar_xyz.device
+        point_feats = torch.zeros((N, self.D), dtype=torch.float32, device=device)
+
+        uvs, z_cam, valid = self.project_points(lidar_xyz)
+        if not valid.any():
+            return point_feats, valid  # all zeros
+
+        idx = torch.nonzero(valid, as_tuple=False).squeeze(1)
+        u = uvs[idx, 0]; v = uvs[idx, 1]
+
+        if bilinear:
+            feats_sel = self._sample_bilinear(u, v)
+        else:
+            i, j = self._token_indices_from_uv(u, v)
+            feats_sel = self.features[i, j]
+
+        point_feats[idx] = feats_sel.to(point_feats.dtype)
+        return point_feats, valid
+
+    @torch.no_grad()
     def assign_features(
         self,
         lidar_xyz: torch.Tensor,
@@ -88,78 +248,68 @@ class LidarToImageProjector:
         occlusion_eps: Union[float, torch.Tensor] = 0.05,
     ):
         """
+        Assign one token feature per 3D point with z-buffer occlusion at token resolution.
+
         Returns:
           point_feats: (N,D) float32
-          valid_mask: (N,) bool  (true if Z>0 and within image bounds [+ occlusion])
-
-        Args:
-          bilinear: if True, use bilinear sampling on token lattice; else nearest token.
-          occlusion_eps:
-            - float: fixed z-occlusion tolerance (meters in camera Z) per token.
-            - Tensor (N,): **per-point** tolerance (meters) to enable range-aware occlusion.
-                           Each point is kept if depth <= min_depth[token] + occlusion_eps[i].
+          vis_mask:    (N,) bool (True = kept)
         """
         device = lidar_xyz.device
         N = lidar_xyz.shape[0]
         point_feats = torch.zeros((N, self.D), dtype=torch.float32, device=device)
 
-        uvs, in_front, depth = self.project_points(lidar_xyz)
-        u, v = uvs[:, 0], uvs[:, 1]
-        in_img = (u >= 0) & (u < self.W) & (v >= 0) & (v < self.H)
-        valid = in_front & in_img
+        # Project & get basic validity (in-image & z>0)
+        uvs, z_cam, valid = self.project_points(lidar_xyz)
+        if not valid.any():
+            return point_feats, valid  # nothing to keep
 
-        # Optional: depth-aware occlusion filtering per token cell
-        keep = valid.clone()
-        if (isinstance(occlusion_eps, (float, int)) and occlusion_eps > 0) or (
-            torch.is_tensor(occlusion_eps) and occlusion_eps.numel() == N
-        ):
-            # token index (nearest) for grouping
-            j = torch.clamp((u / self.patch_w).long(), 0, self.Wf - 1)
-            i = torch.clamp((v / self.patch_h).long(), 0, self.Hf - 1)
-            tok = i * self.Wf + j  # (N,)
+        # Map to tokens
+        u = uvs[:, 0]; v = uvs[:, 1]
+        i_all, j_all = self._token_indices_from_uv(u, v)
+        tok_all = i_all * self.Wf + j_all
 
-            # compute min depth per token among valid points
-            depth_valid = depth.clone()
-            depth_valid[~valid] = float("inf")
+        # Restrict to valid points when building z-buffer
+        tok_v = tok_all[valid]
+        z_v = z_cam[valid]
 
-            min_depth = torch.full((self.Hf * self.Wf,), float("inf"), device=device, dtype=depth.dtype)
+        # Build per-token min-depth z-buffer
+        zbuf = torch.full((self.Hf * self.Wf,), float("inf"), device=device, dtype=torch.float32)
+        try:
+            # In-place scatter reduce (torch >= 2.0)
+            zbuf.scatter_reduce_(0, tok_v, z_v, reduce="amin", include_self=True)
+        except Exception:
+            # CPU/NumPy fallback
+            tok_cpu = tok_v.detach().cpu().numpy()
+            z_cpu = z_v.detach().cpu().numpy().astype(np.float32)
+            arr = np.full((self.Hf * self.Wf,), np.inf, dtype=np.float32)
+            np.minimum.at(arr, tok_cpu, z_cpu)
+            zbuf = torch.from_numpy(arr).to(device=device, dtype=torch.float32)
 
-            # Try fast scatter_reduce (PyTorch >= 2.0); else fallback to NumPy segment-min
-            try:
-                # Newer APIs accept reduce='amin'
-                min_depth = min_depth.scatter_reduce(
-                    0, tok[valid], depth[valid], reduce='amin', include_self=True
-                )
-            except Exception:
-                # CPU/NumPy fallback
-                tok_cpu = tok[valid].detach().cpu().numpy()
-                dep_cpu = depth[valid].detach().cpu().numpy().astype(np.float32)
-                arr = np.full((self.Hf * self.Wf,), np.inf, dtype=np.float32)
-                # segment-min: arr[idx] = min(arr[idx], dep)
-                np.minimum.at(arr, tok_cpu, dep_cpu)
-                min_depth = torch.from_numpy(arr).to(device=device, dtype=depth.dtype)
+        # Per-point epsilon (scalar or vector)
+        if torch.is_tensor(occlusion_eps):
+            eps_all = occlusion_eps.to(device=device, dtype=torch.float32).view(-1)
+            if eps_all.numel() != N:
+                raise ValueError(f"occlusion_eps tensor must be shape (N,), got {tuple(occlusion_eps.shape)}")
+            eps_v = eps_all[valid]
+        else:
+            eps_v = torch.full((int(valid.sum().item()),), float(occlusion_eps), device=device, dtype=torch.float32)
 
-            # prepare per-point epsilon
-            if torch.is_tensor(occlusion_eps):
-                eps_p = occlusion_eps.to(device=device, dtype=depth.dtype)
-                if eps_p.numel() != N:
-                    raise ValueError(f"occlusion_eps tensor must be shape (N,), got {tuple(occlusion_eps.shape)}")
-            else:
-                eps_p = torch.full((N,), float(occlusion_eps), device=device, dtype=depth.dtype)
+        # Keep those near the token's minimum depth
+        keep_v = z_v <= (zbuf.index_select(0, tok_v) + eps_v)
 
-            # keep only those near the token's minimum depth
-            keep = valid & (depth <= (min_depth[tok] + eps_p))
+        # Build full vis mask
+        vis_mask = torch.zeros((N,), dtype=torch.bool, device=device)
+        vis_mask[valid] = keep_v
 
-        idx = torch.nonzero(keep, as_tuple=False).squeeze(1)
-        if idx.numel() > 0:
+        # Assign features to kept points
+        if vis_mask.any().item():
+            idx = torch.nonzero(vis_mask, as_tuple=False).squeeze(1)
+            u_keep = u[idx]; v_keep = v[idx]
             if bilinear:
-                feats_sel = self._sample_bilinear(u[idx], v[idx])
+                feats_sel = self._sample_bilinear(u_keep, v_keep)
             else:
-                # nearest token
-                j = torch.clamp((u[idx] / self.patch_w).long(), 0, self.Wf - 1)
-                i = torch.clamp((v[idx] / self.patch_h).long(), 0, self.Hf - 1)
-                feats_sel = self.features[i, j]
-
+                i_k, j_k = self._token_indices_from_uv(u_keep, v_keep)
+                feats_sel = self.features[i_k, j_k]
             point_feats[idx] = feats_sel.to(point_feats.dtype)
 
-        return point_feats, keep  # keep is the true visibility mask (in-front & in-image [+ occlusion])
+        return point_feats, vis_mask

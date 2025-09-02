@@ -255,9 +255,9 @@ def preprocess_and_save_hercules(
                     occlusion_eps=occlusion_eps,
                 )
 
-            # --- quick projection/visibility debug + fallback every 50 frames ---
+            # --- projection debug + REAL fallback (re-sample features) every 50 frames ---
             try:
-                uvs, z_cam, _ = projector.project_points(xyz.to(torch.float32))
+                uvs, z_cam, valid_imgz = projector.project_points(xyz.to(torch.float32))
                 u, v = uvs[:, 0], uvs[:, 1]
                 in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
                 z_pos = z_cam > 0
@@ -272,11 +272,14 @@ def preprocess_and_save_hercules(
                     zbuf_pix = int(pix.unique().numel())
                     print(f"[PREPROC][dbg] in-image: {cov_img:.2f}% | z>0: {cov_zpos:.2f}% | zbuf_pix≈{zbuf_pix}")
 
-                # ---- Fallback: if occlusion marks everything invisible but we do have in-image points, trust in-image&z>0 ----
-                if vis_mask.sum().item() == 0 and in_img.any().item():
-                    vis_mask = (in_img & z_pos).to(vis_mask.device)
+                # ---- REAL Fallback: if occlusion kept nothing but we DO have in-image&z>0 points,
+                # re-sample features WITHOUT occlusion so features are non-zero.
+                if vis_mask.sum().item() == 0 and valid_imgz.any().item():
                     if frame_counter % 50 == 0:
-                        print("[PREPROC][dbg] using in-image-only visibility fallback for this frame.")
+                        print("[PREPROC][dbg] using in-image-only fallback (re-sampling features).")
+                    point_feats, vis_mask = projector.sample_features_simple(
+                        xyz.to(torch.float32), bilinear=False
+                    )
             except Exception:
                 # projection debug is best-effort; ignore errors here
                 pass
@@ -284,7 +287,10 @@ def preprocess_and_save_hercules(
             # --- border margin suppression (drop projections too close to image edges) ---
             if border_margin_px and border_margin_px > 0:
                 try:
-                    if 'uvs' not in locals():
+                    # ensure uvs exist
+                    try:
+                        uvs
+                    except NameError:
                         uvs, _, _ = projector.project_points(xyz.to(torch.float32))
                     u = uvs[:, 0]
                     v = uvs[:, 1]
@@ -306,7 +312,9 @@ def preprocess_and_save_hercules(
             uv_payload = None
             if save_uv:
                 try:
-                    if 'uvs' not in locals():
+                    try:
+                        uvs
+                    except NameError:
                         uvs, _, _ = projector.project_points(xyz.to(torch.float32))
                     uv_payload = uvs.detach().cpu()
                 except Exception:
