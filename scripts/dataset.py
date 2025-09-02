@@ -130,10 +130,12 @@ def _int_stem(p: Path):
 def _extract_if_needed(tar_path: Path, target_dir: Path):
     """Extract only if target_dir is missing or empty."""
     if not tar_path.exists():
+        print(f" [DATASET] Skipping extraction (missing): {tar_path}")
         return
     if target_dir.exists():
         has_files = any(target_dir.rglob("*"))
         if has_files:
+            print(f" [DATASET] Skipping extraction (already extracted): {tar_path}")
             return
     print(f" [DATASET] Extracting {tar_path} ...")
     target_dir.mkdir(parents=True, exist_ok=True)
