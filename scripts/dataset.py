@@ -265,6 +265,11 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     stereo_left_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_left.yaml")
     stereo_right_intr, _ = _load_intrinsics_yaml(calib_folder / "stereo_right.yaml")
     lidar_to_left_ext, lidar_to_right_ext = _load_extrinsics_txt(calib_folder / "stereo_lidar.txt")
+    print(f" [DATASET] Loaded intrinsics and extrinsics from {calib_folder}")
+    print(f"           Left camera K:\n{stereo_left_intr}")
+    print(f"           Right camera K:\n{stereo_right_intr}")
+    print(f"           LiDAR to Left camera extrinsic:\n{lidar_to_left_ext}")
+    print(f"           LiDAR to Right camera extrinsic:\n{lidar_to_right_ext}")
 
     # --- Images ---
     left_images = _glob_images(left_img_folder)
