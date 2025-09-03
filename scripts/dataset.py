@@ -322,9 +322,10 @@ def load_hercules_dataset_folder(dataset_folder: Path, return_all_fields=False, 
     print(f"[DEBUG] stereo_right_intr:\n{stereo_right_intr}")
 
     stereo_lidar_yaml = _first_existing_path(
-        calib_folder / "stereo_lidar.yaml",
-        calib_folder / "Stereo_lidar.yaml",
-        calib_folder / "Stereo_Lidar.yaml",
+        calib_folder / "stereo_lidar.txt",
+        calib_folder / "Stereo_lidar.txt",
+        calib_folder / "Stereo_Lidar.txt",
+        calib_folder / "Stereo_LiDAR.txt",
     )
     print(f"[DEBUG] Loaded stereo-lidar extrinsics from {stereo_lidar_yaml}")
     lidar_to_left_ext, lidar_to_right_ext = _load_extrinsics_txt(stereo_lidar_yaml)
