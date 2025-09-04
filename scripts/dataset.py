@@ -148,31 +148,33 @@ def _safe_load_aeva_bin(bin_path: Path, return_all_fields: bool = True) -> np.nd
     try:
         data = load_aeva_bin(bin_path, return_all_fields=return_all_fields)
         if isinstance(data, np.ndarray):
-            if data.ndim == 2 and data.shape[1] >= 3:
-                return data.astype(np.float32)
-            elif data.ndim == 1:
-                n_fields = 10 if return_all_fields else 3
-                if data.size % n_fields == 0:
-                    return data.reshape(-1, n_fields).astype(np.float32)
-        elif isinstance(data, dict):
-            if all(k in data for k in ['x', 'y', 'z']):
-                xyz = np.stack([data['x'], data['y'], data['z']], axis=1)
+            if data.ndim == 2:
                 if return_all_fields:
-                    extra = []
-                    for k in ['reflectivity', 'velocity', 'intensity']:
-                        if k in data:
-                            extra.append(np.asarray(data[k]).reshape(-1, 1))
-                    if extra:
-                        return np.hstack([xyz] + extra).astype(np.float32)
-                return xyz.astype(np.float32)
-        elif isinstance(data, (tuple, list)) and len(data) > 0:
-            arr = np.asarray(data[0], dtype=np.float32)
-            if arr.ndim == 2 and arr.shape[1] >= 3:
-                return arr
+                    # Should be 5 or 6 columns [x, y, z, reflectivity, velocity, (intensity)]
+                    if data.shape[1] in [5, 6]:
+                        return data.astype(np.float32)
+                    else:
+                        print(f"Unexpected shape {data.shape} for all fields from {bin_path}")
+                else:
+                    # Should be 3 columns [x, y, z]
+                    if data.shape[1] == 3:
+                        return data.astype(np.float32)
+                    else:
+                        print(f"Unexpected shape {data.shape} for xyz from {bin_path}")
+            else:
+                print(f"Expected 2D array but got {data.ndim}D from {bin_path}")
+        else:
+            print(f"Unexpected return type {type(data)} from load_aeva_bin for {bin_path}")
+
     except Exception as e:
-        print(f"Failed loading {bin_path}: {e}")
-    n_cols = 10 if return_all_fields else 3
-    return np.zeros((0, n_cols), dtype=np.float32)
+        print(f"Failed to load {bin_path}: {e}")
+
+    # Return appropriate empty array as fallback
+    if return_all_fields:
+        # Return 5 columns as minimum for all fields (assuming no intensity)
+        return np.zeros((0, 5), dtype=np.float32)
+    else:
+        return np.zeros((0, 3), dtype=np.float32)
 
 
 def _process_hercules_bin(
