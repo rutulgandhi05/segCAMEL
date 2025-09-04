@@ -13,13 +13,8 @@ from utils.files import read_mcap_file
 from scantinel.parse_mcap_pcl import parse_pcl
 from utils.misc import find_closest, _resolve_default_workers
 
-logger = logging.getLogger(__name__)
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def _safe_K(default_hw=(640, 480)) -> np.ndarray:
-    logger.warning("Using safe K")
+    print("Using safe K")
     fx, fy = float(default_hw[0]), float(default_hw[1])
     cx, cy = float(default_hw[0]) / 2.0, float(default_hw[1]) / 2.0
     return np.array([[fx, 0.0, cx],
@@ -46,7 +41,7 @@ def _load_intrinsics_yaml(file_path: Path) -> Tuple[np.ndarray, Optional[np.ndar
     Returns (K, D). If not present/malformed -> (identity_K, None).
     """
     if not file_path.exists():
-        logger.warning(f"Intrinsics file not found: {file_path}")
+        print(f"Intrinsics file not found: {file_path}")
         return _safe_K(), None
     try:
         lines = file_path.read_text().splitlines()
@@ -66,7 +61,7 @@ def _load_extrinsics_txt_cached(file_path: str) -> Tuple[np.ndarray, np.ndarray]
 def _load_extrinsics_txt(file_path: Path) -> Tuple[np.ndarray, np.ndarray]:
     I = np.eye(4, dtype=np.float32)
     if not file_path.exists():
-        logger.warning(f"Extrinsics file not found: {file_path}")
+        print(f"Extrinsics file not found: {file_path}")
         return I, I
 
     left = None
@@ -82,7 +77,7 @@ def _load_extrinsics_txt(file_path: Path) -> Tuple[np.ndarray, np.ndarray]:
             try:
                 nums = [float(x) for x in vals.strip().split()]
             except ValueError:
-                logger.warning(f"Invalid numbers in extrinsics line: {line}")
+                print(f"Invalid numbers in extrinsics line: {line}")
                 continue
             if len(nums) != 12:
                 continue
@@ -90,14 +85,14 @@ def _load_extrinsics_txt(file_path: Path) -> Tuple[np.ndarray, np.ndarray]:
             M = np.vstack([mat, [0.0, 0.0, 0.0, 1.0]]).astype(np.float32)
             det = np.linalg.det(M[:3, :3])
             if abs(det - 1.0) > 0.1:
-                logger.warning(f"Suspicious rotation matrix determinant: {det}")
+                print(f"Suspicious rotation matrix determinant: {det}")
             if "lidar" in key_l and "left" in key_l:
                 left = M
             elif "lidar" in key_l and "right" in key_l:
                 right = M
         return (left if left is not None else I), (right if right is not None else I)
     except Exception as e:
-        logger.error(f"Failed to parse extrinsics from {file_path}: {e}")
+        print(f"Failed to parse extrinsics from {file_path}: {e}")
         return I, I
 
 
@@ -134,18 +129,18 @@ def _int_stem(p: Path) -> Optional[int]:
 
 def _extract_if_needed(tar_path: Path, target_dir: Path, force: bool = False) -> bool:
     if not tar_path.exists():
-        logger.info(f"Archive not found: {tar_path}")
+        print(f"Archive not found: {tar_path}")
         return False
     if not force and target_dir.exists() and any(target_dir.iterdir()):
         return False
-    logger.info(f"Extracting {tar_path} to {target_dir}")
+    print(f"Extracting {tar_path} to {target_dir}")
     target_dir.mkdir(parents=True, exist_ok=True)
     try:
         with tarfile.open(tar_path, "r:gz") as tar:
             tar.extractall(path=target_dir)
         return True
     except Exception as e:
-        logger.error(f"Failed to extract {tar_path}: {e}")
+        print(f"Failed to extract {tar_path}: {e}")
         return False
 
 
@@ -175,7 +170,7 @@ def _safe_load_aeva_bin(bin_path: Path, return_all_fields: bool = True) -> np.nd
             if arr.ndim == 2 and arr.shape[1] >= 3:
                 return arr
     except Exception as e:
-        logger.warning(f"Failed loading {bin_path}: {e}")
+        print(f"Failed loading {bin_path}: {e}")
     n_cols = 10 if return_all_fields else 3
     return np.zeros((0, n_cols), dtype=np.float32)
 
@@ -247,7 +242,7 @@ def load_hercules_dataset_folder(
     max_workers: Optional[int] = None
 ) -> List[Dict]:
     dataset_folder = Path(dataset_folder)
-    logger.info(f"Loading Hercules dataset from {dataset_folder}")
+    print(f"Loading Hercules dataset from {dataset_folder}")
 
     if max_workers is None:
         max_workers = _resolve_default_workers()
@@ -312,7 +307,7 @@ def load_hercules_dataset_folder(
     right_dict = {_int_stem(p): p for p in right_images if _int_stem(p) is not None}
 
     bin_files = sorted(lidar_folder.glob("*.bin"))
-    logger.info(f"Found {len(bin_files)} LiDAR files, {len(left_images)} left images, {len(right_images)} right images")
+    print(f"Found {len(bin_files)} LiDAR files, {len(left_images)} left images, {len(right_images)} right images")
 
     process_fn = partial(
         _process_hercules_bin,
@@ -334,12 +329,12 @@ def load_hercules_dataset_folder(
             if result is not None:
                 paired_samples.append(result)
 
-    logger.info(f"Successfully paired {len(paired_samples)}/{len(bin_files)} samples")
+    print(f"Successfully paired {len(paired_samples)}/{len(bin_files)} samples")
     return paired_samples
 
 
 def load_scantinel_dataset_folder(dataset_folder: Path) -> List[Dict]:
-    logger.info(f"Loading Scantinel dataset from {dataset_folder}")
+    print(f"Loading Scantinel dataset from {dataset_folder}")
     lidar_files = sorted(dataset_folder.glob("*FMCW.mcap"))
     cam_files = sorted(dataset_folder.glob("*CAM.mcap"))
     if not lidar_files or not cam_files:
@@ -351,7 +346,7 @@ def load_scantinel_dataset_folder(dataset_folder: Path) -> List[Dict]:
             msgs = read_mcap_file(lidar_file, ["/FMCW_pointclouds[0]"])
             lidar_data.extend((msg.proto_msg.data, msg.log_time) for msg in msgs)
         except Exception as e:
-            logger.warning(f"Failed to read {lidar_file}: {e}")
+            print(f"Failed to read {lidar_file}: {e}")
 
     cam_data = []
     for cam_file in tqdm(cam_files, desc="Loading Camera"):
@@ -359,7 +354,7 @@ def load_scantinel_dataset_folder(dataset_folder: Path) -> List[Dict]:
             msgs = read_mcap_file(cam_file, ["/camera"])
             cam_data.extend((msg.proto_msg.data, msg.log_time) for msg in msgs)
         except Exception as e:
-            logger.warning(f"Failed to read {cam_file}: {e}")
+            print(f"Failed to read {cam_file}: {e}")
 
     cam_stamps = [msg[1] for msg in cam_data]
     intrinsics = np.array([[640, 0, 320], [0, 480, 240], [0, 0, 1]], dtype=np.float32)
@@ -382,9 +377,9 @@ def load_scantinel_dataset_folder(dataset_folder: Path) -> List[Dict]:
             }
             paired_samples.append(sample)
         except Exception as e:
-            logger.warning(f"Failed to process sample: {e}")
+            print(f"Failed to process sample: {e}")
 
-    logger.info(f"Successfully paired {len(paired_samples)} samples")
+    print(f"Successfully paired {len(paired_samples)} samples")
     return paired_samples
 
 
