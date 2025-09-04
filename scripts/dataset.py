@@ -187,8 +187,8 @@ def _process_hercules_bin(
     lidar_to_left_ext: np.ndarray,
     lidar_to_right_ext: np.ndarray,
 ) -> Optional[Dict]:
-    pointcloud = _safe_load_aeva_bin(bin_path, return_all_fields)
-    if pointcloud.size == 0:
+    pointcloud = load_aeva_bin(bin_path, return_all_fields)
+    if pointcloud is None:
         return None
 
     ts = int(bin_path.stem)
@@ -200,37 +200,13 @@ def _process_hercules_bin(
     if l_img is None and r_img is None:
         return None
 
-    if r_img is not None:
-        used_camera = "right"
-        used_image = r_img
-        K_used = stereo_right_intr
-        T_used = lidar_to_right_ext
-    else:
-        used_camera = "left"
-        used_image = l_img
-        K_used = stereo_left_intr
-        T_used = lidar_to_left_ext
-
-    # [PATCH] read raw image size once here
-    try:
-        with Image.open(used_image) as im:
-            raw_w, raw_h = im.size
-    except Exception:
-        raw_w, raw_h = 0, 0
-
     return {
-        "pointcloud": pointcloud,               # (N,C>=3) or (N,3)
-        "image": used_image,                    # Path
-        "image_relpath": used_image.relative_to(used_image.anchor) if used_image.is_absolute() else used_image,
-        "orig_size": (raw_w, raw_h),            # [PATCH] raw image size (W,H)
-        "intrinsics": K_used.astype(np.float32),
-        "extrinsics": T_used.astype(np.float32),  # LiDAR->Cam, DO NOT invert here
-        "used_camera": used_camera,
+        "pointcloud": pointcloud,              
         "left_image": l_img,
         "right_image": r_img,
         "timestamps": [ts, l_ts, r_ts],
-        "stereo_left_intrinsics": K_used if used_camera == "left" else None,
-        "stereo_right_intrinsics": K_used if used_camera == "right" else None,
+        "stereo_left_intrinsics":stereo_left_intr,
+        "stereo_right_intrinsics": stereo_right_intr,
         "lidar_to_stereo_left_extrinsic": lidar_to_left_ext,
         "lidar_to_stereo_right_extrinsic": lidar_to_right_ext,
     }

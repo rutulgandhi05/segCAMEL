@@ -129,14 +129,14 @@ def preprocess_and_save_hercules(
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    print(f"root_dir: {root_dir}   save_dir: {save_dir}")
+    print(f"[PREPROC] root_dir: {root_dir}   save_dir: {save_dir}")
 
     extractor = Extractor()
 
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
-    print(f"Using {workers} DataLoader workers for preprocessing...")
+    print(f"[PREPROC] Using {workers} DataLoader workers for preprocessing...")
 
     dataset = HerculesDataset(
         root_dir,
@@ -176,7 +176,7 @@ def preprocess_and_save_hercules(
         stamps = batch.get("timestamps", None)
         rels = batch.get("image_relpath", None)
         cams = batch.get("used_camera", None)
-        orig_sizes = batch.get("orig_size", None)  # [PATCH] provided by dataset.py
+        orig_sizes = batch.get("orig_size", None)
 
         if isinstance(imgs, list):
             images_b = torch.stack(imgs, dim=0)
@@ -196,31 +196,25 @@ def preprocess_and_save_hercules(
             xyz = pc[:, :3].contiguous()
             feats = pc[:, 3:].contiguous() if pc.shape[1] > 3 else torch.zeros((pc.shape[0], 1), dtype=pc.dtype, device=device)
 
-            K_raw = intrs[b].to(device).to(torch.float32)
+            K = intrs[b].to(device).to(torch.float32)
             T = extrs[b].to(device).to(torch.float32)
             img_w, img_h = input_sizes[b]
 
-            # [PATCH] scale K using orig_size from dataset.py
-            raw_w, raw_h = 0, 0
-            if isinstance(orig_sizes, list) and orig_sizes and isinstance(orig_sizes[b], (tuple, list)) and len(orig_sizes[b]) == 2:
-                rw, rh = orig_sizes[b]
-                raw_w, raw_h = int(rw), int(rh)
-            K = _scale_intrinsics(K_raw, raw_w, raw_h, int(img_w), int(img_h))
+            fm_size = fmap_sizes[b]
+            Wf, Hf = fm_size
 
-            Hf = int(getattr(lf_flat, "h", fmap_sizes[b][1] if len(fmap_sizes[b]) == 2 else 0))
-            Wf = int(getattr(lf_flat, "w", fmap_sizes[b][0] if len(fmap_sizes[b]) == 2 else 0))
-            fm_size = (Wf, Hf)
             patch_feats_flat = lf_flat[b].tensor.squeeze(0).to(torch.float32)
 
             projector = LidarToImageProjector(
                 intrinsic=K,
-                extrinsic=T,  # NOTE: do not invert / scale T here
+                extrinsic=T,
                 image_size=(int(img_w), int(img_h)),
                 feature_map_size=fm_size,
                 patch_features=patch_feats_flat,
             )
 
             if range_aware_occl:
+                print(f"[PREPROC][INFO] Using range-aware occlusion with occl_eps_per_m={occl_eps_per_m}, min={occl_eps_min}, max={occl_eps_max}")
                 r = torch.linalg.norm(xyz.to(torch.float32), dim=1)
                 eps_vec = torch.clamp(occl_eps_per_m * r, min=occl_eps_min, max=occl_eps_max)
                 try:
@@ -230,6 +224,7 @@ def preprocess_and_save_hercules(
                         occlusion_eps=eps_vec,
                     )
                 except TypeError:
+                    print(f"[PREPROC][WARN] projector.assign_features() does not support per-point occlusion_eps; using median value instead.")
                     eps_scalar = float(eps_vec.median().item())
                     point_feats, vis_mask = projector.assign_features(
                         lidar_xyz=xyz.to(torch.float32),
@@ -237,6 +232,7 @@ def preprocess_and_save_hercules(
                         occlusion_eps=eps_scalar,
                     )
             else:
+                print(f"[PREPROC][INFO] Using fixed occlusion_eps={occlusion_eps}")
                 point_feats, vis_mask = projector.assign_features(
                     lidar_xyz=xyz.to(torch.float32),
                     bilinear=bilinear,
@@ -256,7 +252,7 @@ def preprocess_and_save_hercules(
                     vi = v.clamp(0, img_h - 1).round().to(torch.long)
                     pix = (vi * img_w + ui)[in_img & z_pos]
                     zbuf_pix = int(pix.unique().numel())
-                    print(f"[PREPROC][dbg] in-image: {cov_img:.2f}% | z>0: {cov_zpos:.2f}% | zbuf_pix≈{zbuf_pix}")
+                    print(f"[PREPROC][debug] in-image: {cov_img:.2f}% | z>0: {cov_zpos:.2f}% | zbuf_pix≈{zbuf_pix}")
                 except Exception:
                     pass
 
@@ -303,7 +299,7 @@ def preprocess_and_save_hercules(
                 "timestamps": stamps[b] if stamps is not None else None,
                 "image_relpath": rels[b] if rels is not None else None,
                 "used_camera": cams[b] if cams is not None else None,
-                "orig_size": (int(raw_w), int(raw_h)) if (raw_w > 0 and raw_h > 0) else None,
+                "orig_size":  orig_sizes[b] if orig_sizes is not None else None,
             }
             if save_uv and uv_payload is not None:
                 payload["proj_uv"] = uv_payload
@@ -313,7 +309,7 @@ def preprocess_and_save_hercules(
                 try:
                     sel = _visible_first_voxel_select(
                         xyz=xyz,
-                        vis_mask=vis_mask,
+                        vis_mask=vis_mask, 
                         voxel_size=float(train_voxel_size),
                         origin=None,
                     )

@@ -48,7 +48,7 @@ class HerculesDataset(Dataset):
             return_all_fields: ask loader to return XYZ+features (reflectivity, velocity, [intensity])
         """
         self.root_dir = Path(root_dir)
-        print(f"Loading Hercules dataset from {self.root_dir}")
+        print(f"[DATALOADER] Loading Hercules dataset from {self.root_dir}")
         self.samples = load_hercules_dataset_folder(self.root_dir, return_all_fields=return_all_fields, max_workers=max_workers)
         self.transform_factory = transform_factory
         self.use_right_image = use_right_image
@@ -65,6 +65,7 @@ class HerculesDataset(Dataset):
 
         right_path = sample.get("right_image")
         left_path = sample.get("left_image")
+
         used_camera = "right" if self.use_right_image and right_path is not None else "left"
         if self.random_if_both and (right_path is not None) and (left_path is not None):
             used_camera = "right" if torch.randint(0, 2, ()).item() == 1 else "left"
@@ -75,17 +76,12 @@ class HerculesDataset(Dataset):
 
         img = Image.open(img_path).convert("RGB")
         orig_size = img.size  # (W, H)
-
-        if self.transform_factory is not None:
-            tf = self.transform_factory.get_transform(orig_size)
-            image_tensor = tf.transform(img)  # [C,H,W] torch.Tensor
-            input_size = tf.resize_size  # (W, H)
-            feature_map_size = tf.feature_map_size  # (Wf, Hf)
-        else:
-            image_tensor = self.fallback_transform(img)
-            input_size = img.size
-            feature_map_size = (input_size[0] // 14, input_size[1] // 14)
-
+        
+        
+        tf = self.transform_factory.get_transform(orig_size)
+        image_tensor = tf.transform(img)  # [C,H,W] torch.Tensor
+        input_size = tf.resize_size  # (W, H)
+        feature_map_size = tf.feature_map_size  # (Wf, Hf)
         img.close()
 
         if used_camera == "right":
@@ -114,4 +110,5 @@ class HerculesDataset(Dataset):
             "feature_map_size": feature_map_size,
             "image_relpath": image_relpath,
             "used_camera": used_camera,
+            "orig_size": orig_size,
         }
