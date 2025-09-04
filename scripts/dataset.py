@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Helpers
 # -----------------------------
 def _safe_K(default_hw=(640, 480)) -> np.ndarray:
+    logger.warning("Using safe K")
     fx, fy = float(default_hw[0]), float(default_hw[1])
     cx, cy = float(default_hw[0]) / 2.0, float(default_hw[1]) / 2.0
     return np.array([[fx, 0.0, cx],
@@ -40,34 +41,22 @@ def _load_intrinsics_yaml_cached(file_path: str) -> Tuple[np.ndarray, Optional[n
 
 
 def _load_intrinsics_yaml(file_path: Path) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    Very lightweight parser: expects numeric line for K on line ~3 and D on ~6.
+    Returns (K, D). If not present/malformed -> (identity_K, None).
+    """
     if not file_path.exists():
         logger.warning(f"Intrinsics file not found: {file_path}")
         return _safe_K(), None
     try:
-        import yaml
-        with open(file_path, "r") as f:
-            data = yaml.safe_load(f)
-
-        K = None
-        if "K" in data:
-            K = np.array(data["K"], dtype=np.float32).reshape(3, 3)
-        elif "camera_matrix" in data and "data" in data["camera_matrix"]:
-            K = np.array(data["camera_matrix"]["data"], dtype=np.float32).reshape(3, 3)
-        if K is None or not _validate_intrinsics(K):
-            logger.warning(f"Invalid intrinsics in {file_path}, using defaults")
-            K = _safe_K()
-
-        D = None
-        for key in ("D", "distortion", "distortion_coefficients"):
-            if key in data:
-                arr = data[key]["data"] if isinstance(data[key], dict) and "data" in data[key] else data[key]
-                D = np.asarray(arr, dtype=np.float32).reshape(-1)
-                break
-        return K.astype(np.float32), D
-    except Exception as e:
-        logger.error(f"Failed to parse intrinsics from {file_path}: {e}")
+        lines = file_path.read_text().splitlines()
+        def _nums(s): return np.fromstring(s, sep="\t" if "\t" in s else " ", dtype=np.float32)
+        K = _nums(lines[3]) if len(lines) > 3 else np.array([])
+        K = K.reshape(3, 3) if K.size == 9 else _safe_K()
+        D = _nums(lines[6]) if len(lines) > 6 else None
+        return K.astype(np.float32), (D.astype(np.float32) if D is not None and D.size > 0 else None)
+    except Exception:
         return _safe_K(), None
-
 
 @lru_cache(maxsize=32)
 def _load_extrinsics_txt_cached(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
