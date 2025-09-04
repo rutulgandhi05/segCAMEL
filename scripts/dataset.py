@@ -266,7 +266,7 @@ def load_hercules_dataset_folder(
     for paths in extraction_paths.values():
         archive = _first_existing_path(*paths)
         if archive.exists():
-            _extract_if_needed(archive, archive.parent)
+            _extract_if_needed(archive, archive.parent, force=True)
 
     lidar_folder = _first_existing_path(
         dataset_folder / "Aeva_data" / "LiDAR" / "Aeva",
