@@ -13,11 +13,10 @@ from torch.utils.data import DataLoader
 from scripts.project_2d_to_3d import LidarToImageProjector
 from utils.misc import _resolve_default_workers
 
-GRID_SIZE = 0.05
+GRID_SIZE = 0.10
 
 
 def custom_collate(batch):
-    # Custom collate for variable‐size fields (pointcloud etc.)
     collated = {}
     for key in batch[0]:
         vals = [sample[key] for sample in batch]
@@ -29,7 +28,6 @@ def custom_collate(batch):
 
 
 def _disk_writer(save_queue: Queue):
-    """Simple writer thread."""
     while True:
         item = save_queue.get()
         if item is None:
@@ -70,40 +68,41 @@ def _visible_first_voxel_select(
     voxel_size: float,
     origin: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """
-    Pick ONE point per voxel, preferring points with vis_mask==True. Returns indices into xyz.
-    All ops run on CPU for simplicity/reliability (data is small relative to frame).
-    """
     if xyz.numel() == 0:
         return torch.empty((0,), dtype=torch.long)
-
     x = xyz.detach().cpu().to(torch.float32)
     v = vis_mask.detach().cpu().to(torch.bool).view(-1)
-
     if origin is None:
-        origin = x.min(dim=0, keepdim=True).values  # (1,3)
+        origin = x.min(dim=0, keepdim=True).values
     else:
         origin = origin.view(1, 3).to(x.dtype)
-
-    g = torch.floor((x - origin) / max(voxel_size, 1e-8)).to(torch.int64)  # (N,3), non-negative
-    # Build a unique voxel key: key = x*(Ymax*Zmax) + y*Zmax + z
+    g = torch.floor((x - origin) / max(voxel_size, 1e-8)).to(torch.int64)
     max_vals = g.max(dim=0).values + 1
     max_vals = torch.clamp(max_vals, min=1)
     M_yz = max_vals[1] * max_vals[2]
-    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]  # (N,)
-
-    # Prefer visible points: sort by (key, flag) where flag=0 for visible else 1
+    key = g[:, 0] * M_yz + g[:, 1] * max_vals[2] + g[:, 2]
     flag = (~v).to(torch.int64)
     composite = key * 2 + flag
     perm = torch.argsort(composite, stable=True)
-
     key_sorted = key[perm]
     first_mask = torch.ones_like(key_sorted, dtype=torch.bool)
     first_mask[1:] = key_sorted[1:] != key_sorted[:-1]
-
-    first_sorted = perm[first_mask]         # indices into original array (after sort)
-    sel = first_sorted.sort().values        # keep original order
+    first_sorted = perm[first_mask]
+    sel = first_sorted.sort().values
     return sel.to(torch.long)
+
+
+def _scale_intrinsics(K: torch.Tensor, raw_w: int, raw_h: int, img_w: int, img_h: int) -> torch.Tensor:
+    if raw_w <= 0 or raw_h <= 0:
+        return K
+    sx = float(img_w) / float(raw_w)
+    sy = float(img_h) / float(raw_h)
+    Ks = K.clone()
+    Ks[0, 0] *= sx
+    Ks[1, 1] *= sy
+    Ks[0, 2] *= sx
+    Ks[1, 2] *= sy
+    return Ks
 
 
 @torch.no_grad()
@@ -116,25 +115,17 @@ def preprocess_and_save_hercules(
     prefetch_factor: int = 4,
     frame_counter: int = 0,
     *,
-    # Projector knobs (safe defaults):
-    bilinear: bool = False,          # bilinear sampling on the token lattice
-    occlusion_eps: float = 0.05,     # >0 enables front-most filtering per token (meters in camera Z)
-    save_uv: bool = False,           # save per-point projected (u,v) for debugging
-    # Geometry tightening
-    border_margin_px: int = 2,       # drop points that land within N px of the image border
-    range_aware_occl: bool = True,   # make occlusion eps increase with distance
-    occl_eps_per_m: float = 0.001,   # eps ≈ occl_eps_per_m * range (meters)
-    occl_eps_min: float = 0.05,      # clamp lower
-    occl_eps_max: float = 0.20,      # clamp upper
+    bilinear: bool = False,
+    occlusion_eps: float = 0.05,
+    save_uv: bool = False,
+    border_margin_px: int = 2,
+    range_aware_occl: bool = True,
+    occl_eps_per_m: float = 0.001,
+    occl_eps_min: float = 0.05,
+    occl_eps_max: float = 0.20,
     export_train_vox: bool = True,
-    train_voxel_size: float = 0.10,  # typical outdoor training voxel
+    train_voxel_size: float = 0.10,
 ):
-    """
-    Extract DINO features for each image, project onto LiDAR points, and save per-frame dumps.
-
-    Also writes a compact training file per frame (*_trainvox.pth) with one point per voxel,
-    preferring visible points, to make training batches robust (no more "empty mask" skips).
-    """
     root_dir = Path(root_dir)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -169,24 +160,23 @@ def preprocess_and_save_hercules(
     print(f"[PREPROC] {root_dir.name}: {len(dataset)} frames | workers={workers} bs={batch_size}")
     print(f"[PREPROC] DINO: {extractor.dino_model}")
 
-    # --- set up background writer thread ---
     save_queue: Queue = Queue(maxsize=workers * 2)
     writer_thread = Thread(target=_disk_writer, args=(save_queue,), daemon=True)
     writer_thread.start()
 
     t0 = time.time()
 
-    # --- main loop ---
     for batch in tqdm(dataloader, desc="Processing frames", unit="batch"):
-        pcs = batch["pointcloud"]                  # list[Tensor]
-        imgs = batch["image_tensor"]               # list[Tensor] or Tensor
-        intrs = batch["intrinsics"]                # list[Tensor]
-        extrs = batch["extrinsics"]                # list[Tensor]
-        input_sizes = batch["input_size"]          # list[(W,H)]
-        fmap_sizes = batch["feature_map_size"]     # list[(Wf,Hf)]
-        stamps = batch.get("timestamps", None)     # optional
-        rels = batch.get("image_relpath", None)    # optional
-        cams = batch.get("used_camera", None)      # optional
+        pcs = batch["pointcloud"]
+        imgs = batch["image_tensor"]
+        intrs = batch["intrinsics"]
+        extrs = batch["extrinsics"]
+        input_sizes = batch["input_size"]
+        fmap_sizes = batch["feature_map_size"]
+        stamps = batch.get("timestamps", None)
+        rels = batch.get("image_relpath", None)
+        cams = batch.get("used_camera", None)
+        orig_sizes = batch.get("orig_size", None)  # [PATCH] provided by dataset.py
 
         if isinstance(imgs, list):
             images_b = torch.stack(imgs, dim=0)
@@ -194,54 +184,52 @@ def preprocess_and_save_hercules(
             images_b = imgs
         images_b = images_b.to(device, non_blocking=True)
 
-        # extract DINO features
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
             local_feats = extractor.extract_dino_features(images_b)
         lf_flat = local_feats.flat()
 
         B = len(pcs)
-        assert lf_flat.tensor.shape[0] == B, "Batch size mismatch between images and extracted features."
+        assert lf_flat.tensor.shape[0] == B
 
-        # process each sample in the batch
         for b in range(B):
-            pc = pcs[b].to(device)                      # (N, C)
+            pc = pcs[b].to(device)
             xyz = pc[:, :3].contiguous()
             feats = pc[:, 3:].contiguous() if pc.shape[1] > 3 else torch.zeros((pc.shape[0], 1), dtype=pc.dtype, device=device)
 
-            K = intrs[b].to(device).to(torch.float32)
+            K_raw = intrs[b].to(device).to(torch.float32)
             T = extrs[b].to(device).to(torch.float32)
-            img_w, img_h = input_sizes[b]                  # (W,H) after TF resize
+            img_w, img_h = input_sizes[b]
 
-            # Derive feature-map size directly from LocalFeatures metadata to avoid W/H swap:
-            # LocalFeatures stores (h,w)
+            # [PATCH] scale K using orig_size from dataset.py
+            raw_w, raw_h = 0, 0
+            if isinstance(orig_sizes, list) and orig_sizes and isinstance(orig_sizes[b], (tuple, list)) and len(orig_sizes[b]) == 2:
+                rw, rh = orig_sizes[b]
+                raw_w, raw_h = int(rw), int(rh)
+            K = _scale_intrinsics(K_raw, raw_w, raw_h, int(img_w), int(img_h))
+
             Hf = int(getattr(lf_flat, "h", fmap_sizes[b][1] if len(fmap_sizes[b]) == 2 else 0))
             Wf = int(getattr(lf_flat, "w", fmap_sizes[b][0] if len(fmap_sizes[b]) == 2 else 0))
             fm_size = (Wf, Hf)
+            patch_feats_flat = lf_flat[b].tensor.squeeze(0).to(torch.float32)
 
-            # Flattened per-sample patch features (Hf*Wf, D) -> float32
-            patch_feats_flat = lf_flat[b].tensor.squeeze(0).to(torch.float32)  # (Hf*Wf, D)
-
-            # project & assign
             projector = LidarToImageProjector(
                 intrinsic=K,
-                extrinsic=T,
-                image_size=(img_w, img_h),
+                extrinsic=T,  # NOTE: do not invert / scale T here
+                image_size=(int(img_w), int(img_h)),
                 feature_map_size=fm_size,
-                patch_features=patch_feats_flat,  # accepts (Hf*Wf, D) or (Hf,Wf,D)
+                patch_features=patch_feats_flat,
             )
 
-            # --- per-point, range-aware occlusion eps (with safe fallback) ---
             if range_aware_occl:
-                r = torch.linalg.norm(xyz.to(torch.float32), dim=1)                  # (N,)
+                r = torch.linalg.norm(xyz.to(torch.float32), dim=1)
                 eps_vec = torch.clamp(occl_eps_per_m * r, min=occl_eps_min, max=occl_eps_max)
                 try:
                     point_feats, vis_mask = projector.assign_features(
                         lidar_xyz=xyz.to(torch.float32),
                         bilinear=bilinear,
-                        occlusion_eps=eps_vec,   # pass tensor if supported
+                        occlusion_eps=eps_vec,
                     )
                 except TypeError:
-                    # Fallback: use a robust scalar (median of the per-point eps)
                     eps_scalar = float(eps_vec.median().item())
                     point_feats, vis_mask = projector.assign_features(
                         lidar_xyz=xyz.to(torch.float32),
@@ -255,49 +243,31 @@ def preprocess_and_save_hercules(
                     occlusion_eps=occlusion_eps,
                 )
 
-            # --- projection debug + REAL fallback (re-sample features) every 50 frames ---
-            try:
-                uvs, z_cam, valid_imgz = projector.project_points(xyz.to(torch.float32))
-                u, v = uvs[:, 0], uvs[:, 1]
-                in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
-                z_pos = z_cam > 0
-
-                if frame_counter % 50 == 0:
+            # Debug stats every 50 frames
+            if (frame_counter % 50) == 0:
+                try:
+                    uvs, z_cam, _ = projector.project_points(xyz.to(torch.float32))
+                    u, v = uvs[:, 0], uvs[:, 1]
+                    in_img = (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+                    z_pos = z_cam > 0
                     cov_img = float(in_img.float().mean().item()) * 100.0
                     cov_zpos = float(z_pos.float().mean().item()) * 100.0
-                    # Approximate z-buffer coverage: unique pixel count where in-image & z>0
                     ui = u.clamp(0, img_w - 1).round().to(torch.long)
                     vi = v.clamp(0, img_h - 1).round().to(torch.long)
                     pix = (vi * img_w + ui)[in_img & z_pos]
                     zbuf_pix = int(pix.unique().numel())
                     print(f"[PREPROC][dbg] in-image: {cov_img:.2f}% | z>0: {cov_zpos:.2f}% | zbuf_pix≈{zbuf_pix}")
+                except Exception:
+                    pass
 
-                # ---- REAL Fallback: if occlusion kept nothing but we DO have in-image&z>0 points,
-                # re-sample features WITHOUT occlusion so features are non-zero.
-                if vis_mask.sum().item() == 0 and valid_imgz.any().item():
-                    if frame_counter % 50 == 0:
-                        print("[PREPROC][dbg] using in-image-only fallback (re-sampling features).")
-                    point_feats, vis_mask = projector.sample_features_simple(
-                        xyz.to(torch.float32), bilinear=False
-                    )
-            except Exception:
-                # projection debug is best-effort; ignore errors here
-                pass
-
-            # --- border margin suppression (drop projections too close to image edges) ---
+            # Border margin suppression
             if border_margin_px and border_margin_px > 0:
                 try:
-                    # ensure uvs exist
-                    try:
-                        uvs
-                    except NameError:
-                        uvs, _, _ = projector.project_points(xyz.to(torch.float32))
-                    u = uvs[:, 0]
-                    v = uvs[:, 1]
+                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    u = uvs[:, 0]; v = uvs[:, 1]
                     in_bounds = (u >= border_margin_px) & (u < (img_w - border_margin_px)) & \
                                 (v >= border_margin_px) & (v < (img_h - border_margin_px))
                     vis_mask = vis_mask & in_bounds.to(vis_mask.device)
-                    # zero out features for suppressed points (keeps array sizes aligned)
                     if point_feats is not None and point_feats.numel() == xyz.shape[0] * point_feats.shape[1]:
                         point_feats = point_feats.clone()
                         point_feats[~vis_mask] = 0.0
@@ -308,14 +278,10 @@ def preprocess_and_save_hercules(
                 cov = float(vis_mask.float().mean().item()) * 100.0
                 print(f"[PREPROC] visible points: {cov:.2f}%")
 
-            # Optional: save projected (u,v) for debugging/overlays
             uv_payload = None
             if save_uv:
                 try:
-                    try:
-                        uvs
-                    except NameError:
-                        uvs, _, _ = projector.project_points(xyz.to(torch.float32))
+                    uvs, _, _ = projector.project_points(xyz.to(torch.float32))
                     uv_payload = uvs.detach().cpu()
                 except Exception:
                     uv_payload = None
@@ -323,15 +289,13 @@ def preprocess_and_save_hercules(
             lid_ts = int(stamps[b][0]) if stamps is not None else frame_counter
             stem = lid_ts
 
-            # ---- Standard dense dump (unchanged behavior) ----
             out_path = _safe_outpath(save_dir, stem, suffix=".pth")
             payload = {
-                "coord": xyz.float().cpu(),               # (N,3)
-                "feat": feats.float().cpu(),              # (N,F)
-                "dino_feat": point_feats.half().cpu(),    # (N,D) save fp16 to cut storage
-                "mask": vis_mask.cpu(),                   # (N,) True where Z>0 & in-image (& occlusion-kept or fallback)
-                "grid_size": torch.tensor(GRID_SIZE),     # scalar
-                # light metadata for future debugging
+                "coord": xyz.float().cpu(),
+                "feat": feats.float().cpu(),
+                "dino_feat": point_feats.half().cpu(),
+                "mask": vis_mask.cpu(),
+                "grid_size": torch.tensor(float(train_voxel_size)),
                 "intrinsics": K.cpu(),
                 "extrinsics": T.cpu(),
                 "input_size": (int(img_w), int(img_h)),
@@ -339,9 +303,10 @@ def preprocess_and_save_hercules(
                 "timestamps": stamps[b] if stamps is not None else None,
                 "image_relpath": rels[b] if rels is not None else None,
                 "used_camera": cams[b] if cams is not None else None,
+                "orig_size": (int(raw_w), int(raw_h)) if (raw_w > 0 and raw_h > 0) else None,
             }
             if save_uv and uv_payload is not None:
-                payload["proj_uv"] = uv_payload  # (N,2)
+                payload["proj_uv"] = uv_payload
             save_queue.put((out_path, payload))
 
             if export_train_vox:
@@ -350,21 +315,19 @@ def preprocess_and_save_hercules(
                         xyz=xyz,
                         vis_mask=vis_mask,
                         voxel_size=float(train_voxel_size),
-                        origin=None,  # per-frame min origin
+                        origin=None,
                     )
                     if sel.numel() > 0:
-                        # keep index & tensors on the SAME device, then .cpu() for payload
                         sel_dev = sel.to(xyz.device)
                         vox_coord = xyz.index_select(0, sel_dev).float().cpu()
                         vox_feat  = feats.index_select(0, sel_dev).float().cpu()
                         vox_mask  = vis_mask.index_select(0, sel_dev).cpu()
                         vox_dino  = point_feats.index_select(0, sel_dev).half().cpu()
-
                         trainvox_payload = {
-                            "vox_coord": vox_coord,         # (M,3)
-                            "vox_feat":  vox_feat,          # (M,F)
-                            "vox_mask":  vox_mask,          # (M,)
-                            "vox_dino":  vox_dino,          # (M,D)
+                            "vox_coord": vox_coord,
+                            "vox_feat":  vox_feat,
+                            "vox_mask":  vox_mask,
+                            "vox_dino":  vox_dino,
                             "grid_size": torch.tensor(float(train_voxel_size)),
                             "lidar_stem": str(stem),
                             "image_stem": _safe_stem_from_rel(rels[b]) if rels is not None else "",
@@ -375,18 +338,14 @@ def preprocess_and_save_hercules(
                         trainvox_path = _safe_outpath(save_dir, stem, suffix="_trainvox.pth")
                         save_queue.put((trainvox_path, trainvox_payload))
                 except Exception as e:
-                    # Do not fail the whole preprocessing if trainvox export hiccups
                     print(f"[WARN][trainvox] {stem}: {e}")
 
             frame_counter += 1
 
-        # free per-batch GPU mem
         del images_b, local_feats, lf_flat
         if device == "cuda":
             torch.cuda.empty_cache()
 
-    # --- end of main loop ---
-    # wait for all writes to finish
     save_queue.join()
     save_queue.put(None)
     writer_thread.join()
@@ -409,11 +368,10 @@ def preprocess_and_save_hercules(
 
 
 if __name__ == "__main__":
-    # Prefer fast local copy on cluster, fall back to network path
-    data_root = os.getenv("TMP_HERCULES_DATASET") or os.getenv("HERCULES_DATASET")
+    data_root = os.getenv("TMP_HERCULES_DATASET")
     save_dir = os.getenv("PREPROCESS_OUTPUT_DIR")
     if not data_root:
-        raise EnvironmentError("TMP_HERCULES_DATASET or HERCULES_DATASET must be set.")
+        raise EnvironmentError("TMP_HERCULES_DATASET must be set.")
     if not save_dir:
         raise EnvironmentError("PREPROCESS_OUTPUT_DIR environment variable not set.")
 
@@ -424,23 +382,21 @@ if __name__ == "__main__":
     folders_env = os.getenv("PREPROCESS_FOLDERS")
     if not folders_env:
         raise EnvironmentError("PREPROCESS_FOLDERS environment variable not set.")
-
     folders = [f.strip() for f in folders_env.split(",") if f.strip()]
 
     counter = 0
     for folder in folders:
         root_dir = data_root / folder
         print(f"Processing folder: {folder}")
-
         counter = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
             workers=None,
             batch_size=8,
-            prefetch_factor=2,  # tune based on your I/O vs CPU/GPU balance
+            prefetch_factor=2,
             frame_counter=counter,
             bilinear=False,
-            occlusion_eps=0.20,         # <- loosened tolerance (meters)
+            occlusion_eps=0.05,  
             save_uv=False,
             border_margin_px=2,
             range_aware_occl=True,
@@ -450,5 +406,4 @@ if __name__ == "__main__":
             export_train_vox=True,
             train_voxel_size=0.10,
         )
-
     print(f"[PREPROC] Total frames processed: {counter}")

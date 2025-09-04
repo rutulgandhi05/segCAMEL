@@ -1,3 +1,4 @@
+# train_segmentation.py
 import os
 import math
 from pathlib import Path
@@ -21,10 +22,7 @@ except RuntimeError:
 
 
 def _safe_grid_coord(coord: torch.Tensor, grid_size: float, origin: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """
-    Build integer voxel coordinates from RAW coords (not normalized).
-    origin: if provided (3,), use it as min; else compute per-sample min().
-    """
+    """Build integer voxel coordinates from RAW coords (not normalized)."""
     if origin is None:
         origin = coord.min(dim=0, keepdim=True).values
     else:
@@ -111,18 +109,18 @@ class TrainVoxDataset(torch.utils.data.Dataset):
             dino  = rec.get("vox_dino", None)
             if dino is None:
                 raise RuntimeError(f"{f.name} is missing 'vox_dino' needed for distillation.")
-            grid_size = float(rec.get("grid_size", 0.10))
+            gs = rec.get("grid_size", 0.10)
+            grid_size = float(gs.item() if torch.is_tensor(gs) else gs)
             lidar_stem = rec.get("lidar_stem", Path(f).stem)
             image_stem = rec.get("image_stem", "")
 
             grid_coord = _safe_grid_coord(coord, grid_size)
-            out = {
+            return {
                 "coord": coord, "feat": feat, "mask": mask.to(torch.bool),
                 "grid_coord": grid_coord, "grid_size": torch.tensor(grid_size),
                 "dino_feat": dino,  # (M,D)
                 "lidar_stem": str(lidar_stem), "image_stem": str(image_stem),
             }
-            return out
 
         # ---- Fallback path (dense .pth -> visible-first voxel) ----
         coord = rec["coord"].to(torch.float32)                              # (N,3)
@@ -144,13 +142,12 @@ class TrainVoxDataset(torch.utils.data.Dataset):
         grid_size = float(self.fallback_voxel_size)
         grid_coord = _safe_grid_coord(coord, grid_size)
 
-        out = {
+        return {
             "coord": coord, "feat": feat, "mask": mask,
             "grid_coord": grid_coord, "grid_size": torch.tensor(grid_size),
             "dino_feat": dino,
             "lidar_stem": Path(f).stem, "image_stem": Path(f).stem,
         }
-        return out
 
 
 def collate_trainvox(batch):
@@ -163,6 +160,7 @@ def collate_trainvox(batch):
         "lidar_stems": [], "image_stems": [],
     }
     offset = 0
+    kept = 0
     for bid, sample in enumerate(batch):
         coord = sample["coord"]; feat = sample["feat"]; mask = sample["mask"].to(torch.bool)
         grid  = sample["grid_coord"]; gsize = float(sample["grid_size"])
@@ -179,11 +177,22 @@ def collate_trainvox(batch):
         collated["grid_size"].append(gsize)
         collated["dino_feat"].append(dino)
 
-        collated["batch"].append(torch.full((N,), bid, dtype=torch.long))
+        collated["batch"].append(torch.full((N,), kept, dtype=torch.long))
         offset += N
         collated["offset"].append(offset)
         collated["lidar_stems"].append(sample.get("lidar_stem", ""))
         collated["image_stems"].append(sample.get("image_stem", ""))
+        kept += 1
+
+    if kept == 0:
+        # Return empty tensors to avoid crashes; caller will skip this batch
+        return {
+            "coord": torch.zeros((0, 3)), "feat": torch.zeros((0, 0)), "mask": torch.zeros((0,), dtype=torch.bool),
+            "grid_coord": torch.zeros((0, 3), dtype=torch.int32), "grid_size": torch.tensor([0.10]),
+            "dino_feat": torch.zeros((0, 1)), "batch": torch.zeros((0,), dtype=torch.long),
+            "offset": torch.zeros((0,), dtype=torch.long),
+            "lidar_stems": [], "image_stems": [],
+        }
 
     # concat
     for k in ["coord", "feat", "mask", "grid_coord", "dino_feat", "batch"]:
@@ -210,11 +219,8 @@ def _load_state(m, state):
         m.load_state_dict(stripped); return
     except Exception:
         pass
-    try:
-        added = {("module." + k if not k.startswith("module.") else k): v for k, v in state.items()}
-        m.load_state_dict(added); return
-    except Exception as e:
-        raise e
+    added = {("module." + k if not k.startswith("module.") else k): v for k, v in state.items()}
+    m.load_state_dict(added)
 
 
 def train(
@@ -375,20 +381,24 @@ def train(
 
         optimizer.zero_grad(set_to_none=True)
 
+        warn_once_all_mask = True
+
         for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
             try:
                 if batch["coord"].numel() == 0:
-                    print(f"[ERROR][Batch {batch_idx}] Empty coord tensor, skipping batch")
+                    if batch_idx % 20 == 0:
+                        print(f"[WARN][Batch {batch_idx}] Empty coord tensor, skipping")
                     skipped_batches += 1; continue
 
                 mask_cpu = batch["mask"].bool()
                 if mask_cpu.sum().item() == 0:
-                    # Helpful debug once per epoch
-                    if batch_idx % 50 == 0:
-                        print(f"[WARN][Batch {batch_idx}] All selected points are non-visible after voxel selection. "
-                              f"Consider checking border_margin/occlusion in preprocessing, or voxel size.")
-                    skipped_batches += 1; continue
-                idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
+                    if warn_once_all_mask:
+                        print("[WARN] All points masked as non-visible in this batch; "
+                              "loss will be computed on all points as a fallback.")
+                        warn_once_all_mask = False
+                    idx_cpu = torch.arange(batch["coord"].shape[0], dtype=torch.long)
+                else:
+                    idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
 
                 # Move to device
                 coord = batch["coord"].to(device, non_blocking=True).float()
@@ -439,8 +449,10 @@ def train(
                     print(f"[ERROR][Batch {batch_idx}] NaN/Inf in proj_head output, skipping batch")
                     skipped_batches += 1; continue
 
-                # Distill on visible rows only
+                # Distill on visible rows only (or all rows if fallback triggered)
                 idx = idx_cpu.to(device, non_blocking=True)
+                if idx.numel() == 0:
+                    skipped_batches += 1; continue
                 pred_valid = pred_proj.index_select(0, idx)
                 dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
                 dino_valid = torch.nan_to_num(dino_valid, nan=0.0, posinf=1e4, neginf=-1e4)
@@ -531,7 +543,6 @@ def train(
 if __name__ == "__main__":
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
-    TRAIN_CHECKPOINTS.mkdir(parents=True, exist_ok=True)
 
     train(
         data_dir=DATA_DIR,
