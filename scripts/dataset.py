@@ -189,7 +189,7 @@ def _process_hercules_bin(
     lidar_to_left_ext: np.ndarray,
     lidar_to_right_ext: np.ndarray,
 ) -> Optional[Dict]:
-    pointcloud = load_aeva_bin(bin_path, return_all_fields)
+    pointcloud = _safe_load_aeva_bin(bin_path, return_all_fields)
     if pointcloud is None:
         return None
 
