@@ -97,7 +97,7 @@ def load_aeva_bin(bin_path, return_all_fields=False):
     unpack = struct.Struct(point_format).unpack_from
 
     for i in range(n_points):
-        offset = i * point_size
+        offset = i * point_size 
         vals = unpack(raw_data, offset)
         for k, v in zip(field_names, vals):
             all_fields[k].append(v)
@@ -106,7 +106,7 @@ def load_aeva_bin(bin_path, return_all_fields=False):
     for k in all_fields:
         all_fields[k] = np.asarray(all_fields[k], dtype=np.float32 if k != 'time_offset_ns' and k != 'line_index' else np.int32)
     
-    all_fields = np.stack([all_fields['x'], 
+    all_fields_trimmed = np.stack([all_fields['x'], 
                            all_fields['y'], 
                            all_fields['z'], 
                            all_fields['reflectivity'], 
@@ -119,7 +119,7 @@ def load_aeva_bin(bin_path, return_all_fields=False):
                                                                                      all_fields['intensity']], 
                                                                                      axis=1)
     if return_all_fields:
-        return all_fields
+        return all_fields_trimmed
     return np.stack([all_fields['x'], all_fields['y'], all_fields['z']], axis=1)
 
 def test():
