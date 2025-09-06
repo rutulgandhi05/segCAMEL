@@ -252,8 +252,8 @@ def train(
         torch.backends.cudnn.benchmark = True
 
     data_dir = Path(data_dir)
-    print(f"Starting training on device: {device}")
-    print(f"Training data: {data_dir}")
+    print(f"[INFO] Starting training on device: {device}")
+    print(f"[INFO] Training data: {data_dir}")
 
     dataset = TrainVoxDataset(data_dir, fallback_voxel_size=voxel_size)
     using_trainvox = dataset.using_trainvox
@@ -261,8 +261,8 @@ def train(
     if workers is None:
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
-    print(f"Using {workers} DataLoader workers for training...")
-    print(f"{'Using' if using_trainvox else 'FALLBACK to'} *_trainvox.pth")
+    print(f"[INFO] Using {workers} DataLoader workers for training...")
+    print(f"[INFO] {'Using' if using_trainvox else 'FALLBACK to'} *_trainvox.pth")
 
     if len(dataset) == 0:
         raise RuntimeError(f"No training samples found in {data_dir}. Did preprocessing write *_trainvox.pth or dense .pth?")
