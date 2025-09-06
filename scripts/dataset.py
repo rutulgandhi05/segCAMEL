@@ -169,13 +169,6 @@ def _safe_load_aeva_bin(bin_path: Path, return_all_fields: bool = True) -> np.nd
     except Exception as e:
         print(f"Failed to load {bin_path}: {e}")
 
-    # Return appropriate empty array as fallback
-    if return_all_fields:
-        # Return 5 columns as minimum for all fields (assuming no intensity)
-        return np.zeros((0, 5), dtype=np.float32)
-    else:
-        return np.zeros((0, 3), dtype=np.float32)
-
 
 def _process_hercules_bin(
     bin_path: Path,
@@ -189,7 +182,7 @@ def _process_hercules_bin(
     lidar_to_left_ext: np.ndarray,
     lidar_to_right_ext: np.ndarray,
 ) -> Optional[Dict]:
-    pointcloud = _safe_load_aeva_bin(bin_path, return_all_fields)
+    pointcloud = load_aeva_bin(bin_path, return_all_fields)
     if pointcloud is None:
         return None
 

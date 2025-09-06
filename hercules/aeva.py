@@ -28,7 +28,7 @@ def read_aeva_bin(bin_path: Path):
         print(f"Warning: File contains {remainder} extra byte(s). Trimming extra bytes.")
         raw_data = raw_data[:total_len - remainder]
     
-    return point_size, raw_data
+    return point_size, raw_data, point_format
 
 
 def read_aeva_bin_for_foxglove(bin_path: Path, timestamp: int):
@@ -44,7 +44,7 @@ def read_aeva_bin_for_foxglove(bin_path: Path, timestamp: int):
     Returns:
       PB_PointCloud: A Foxglove-compatible PointCloud message.
     """
-    point_size, raw_data = read_aeva_bin(bin_path)
+    point_size, raw_data, point_format = read_aeva_bin(bin_path)
 
     msg = {
         "timestamp": datetime.fromtimestamp(timestamp/1000000000),  # Timestamp can be customized as needed.
@@ -82,28 +82,16 @@ def load_aeva_bin(bin_path, return_all_fields=False):
     if not bin_path.exists():
         raise FileNotFoundError(f"File not found: {bin_path}")
     
-    try:
-        stem_int = int(bin_path.stem)
-    except Exception:
-        stem_int = 0
-    
-    if stem_int > INTENSITY_THRESHOLD:
-        point_format = '<fffffiBf'  # with intensity
+    point_size, raw_data, point_format = read_aeva_bin(bin_path)
+
+    if point_size == 29:
         field_names = ['x', 'y', 'z', 'reflectivity', 'velocity', 'time_offset_ns', 'line_index', 'intensity']
-    else:
-        point_format = '<fffffiB'   # no intensity
+    elif point_size == 25:
         field_names = ['x', 'y', 'z', 'reflectivity', 'velocity', 'time_offset_ns', 'line_index']
-    
-    point_size = struct.calcsize(point_format)
+    else:
+        raise ValueError(f"Unexpected point size: {point_size}")
+        
 
-    with open(bin_path, 'rb') as f:
-        raw_data = f.read()
-
-    total_len = len(raw_data)
-    remainder = total_len % point_size
-
-    if remainder != 0:
-        raw_data = raw_data[:total_len - remainder]
     n_points = len(raw_data) // point_size
     all_fields = {k: [] for k in field_names}
     unpack = struct.Struct(point_format).unpack_from
@@ -116,7 +104,7 @@ def load_aeva_bin(bin_path, return_all_fields=False):
             
     # Convert to numpy arrays
     for k in all_fields:
-        all_fields[k] = np.array(all_fields[k], dtype=np.float32 if k != 'time_offset_ns' and k != 'line_index' else np.int32)
+        all_fields[k] = np.asarray(all_fields[k], dtype=np.float32 if k != 'time_offset_ns' and k != 'line_index' else np.int32)
     
     all_fields = np.stack([all_fields['x'], 
                            all_fields['y'], 
