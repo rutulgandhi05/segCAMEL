@@ -39,8 +39,30 @@ MAX_PASSES        = 3
 SAMPLE_PER_FRAME  = 50_000
 USE_FP16_MATMUL   = True
 SEED              = 0
-DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]
+DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]   # 5 edges → 4 bins
+
+# NOTE: user-tuned defaults (may have wrong length); we auto-fix below
 DIST_RATIOS       = [0.35, 0.30, 0.20, 0.10, 0.05]
+
+def _align_ratios(edges, ratios):
+    """
+    Ensure len(ratios) == len(edges)-1 and sum==1.
+    If too long → trim; too short → pad last; non-positive sum → uniform.
+    """
+    nb = max(1, len(edges) - 1)
+    r = list(ratios)
+    if len(r) >= nb:
+        r = r[:nb]
+    else:
+        r = r + [r[-1] if r else 1.0] * (nb - len(r))
+    s = float(sum(r))
+    if s <= 0:
+        r = [1.0 / nb] * nb
+    else:
+        r = [x / s for x in r]
+    return r
+
+ALIGNED_DIST_RATIOS = _align_ratios(DIST_EDGES, DIST_RATIOS)
 
 # --- Segmentation ---
 SMOOTH_ITERS      = 2
@@ -118,6 +140,7 @@ def _zip_entries_count(zip_path: Path) -> int:
 def _ensure_dirs():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ZIP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    INFER_DIR.mkdir(parents=True, exist_ok=True)
 
 def _maybe_run_inference():
     if not RUN_INFERENCE:
@@ -146,6 +169,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
       kappa     : (K,) or None (k-means)
     """
     print(f"[segment_once] Learning prototypes (mode={MODE})…")
+    print(f"[segment_once] Distance bins: {DIST_EDGES}  |  ratios (aligned): {ALIGNED_DIST_RATIOS}")
     t0 = time.time()
 
     if MODE.lower() == "vmf":
@@ -160,7 +184,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
             update_chunk=1_000_000,
             feature_cfg=FEATURE_CFG,
             dist_edges=DIST_EDGES,
-            dist_ratios=DIST_RATIOS,
+            dist_ratios=ALIGNED_DIST_RATIOS,
             use_fp16=USE_FP16_MATMUL,
             # DataLoader knobs
             dl_workers=DL_WORKERS,
@@ -182,7 +206,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
             update_chunk=1_000_000,
             feature_cfg=FEATURE_CFG,
             dist_edges=DIST_EDGES,
-            dist_ratios=DIST_RATIOS,
+            dist_ratios=ALIGNED_DIST_RATIOS,
             use_fp16=USE_FP16_MATMUL,
             # DataLoader knobs
             dl_workers=DL_WORKERS,
@@ -211,6 +235,8 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         "dl_batch_io": DL_BATCH_IO,
         "dl_pin_memory": DL_PIN_MEMORY,
         "zip_mode": "w",
+        "dist_edges": DIST_EDGES,
+        "dist_ratios": ALIGNED_DIST_RATIOS,
     })
     print(f"[segment_once] Saved prototypes -> {PROTOS_PATH}  ({time.time()-t0:.1f}s)")
     return mu, kappa

@@ -6,7 +6,7 @@
 #SBATCH -c 32
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 30:00:00
+#SBATCH -t 40:00:00
 #SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:2
 #SBATCH --mail-type ALL
@@ -24,7 +24,7 @@ echo "[INFO] Dataset copied."
 
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export PREPROCESS_FOLDERS="library_01_Day,mountain_01_Day,parking_lot_01_Day,parking_lot_04_Day,river_island_01_Day,sports_complex_01_Day"
+export PREPROCESS_FOLDERS="library_01_Day,mountain_01_Day,parking_lot_04_Day,stream_01_Day,river_island_02_Day,sports_complex_01_Day"
 
 mkdir -p $PREPROCESS_OUTPUT_DIR
 mkdir -p $TRAIN_CHECKPOINTS

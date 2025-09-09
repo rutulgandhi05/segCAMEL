@@ -248,6 +248,11 @@ def train(
 
     device = torch.device(device)
     if device.type == "cuda":
+        # Small perf hint
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
@@ -262,7 +267,7 @@ def train(
         workers = _resolve_default_workers()
     workers = max(1, int(workers))
     print(f"[INFO] Using {workers} DataLoader workers for training...")
-    print(f"[INFO] {'Using' if using_trainvox else 'FALLBACK to'} *_trainvox.pth")
+    print("[INFO] " + ("Using *_trainvox.pth" if using_trainvox else "FALLBACK to dense .pth → visible-first voxelization on the fly"))
 
     if len(dataset) == 0:
         raise RuntimeError(f"No training samples found in {data_dir}. Did preprocessing write *_trainvox.pth or dense .pth?")

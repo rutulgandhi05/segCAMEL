@@ -25,18 +25,18 @@ echo "[INFO] Dataset copied."
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output
-export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs
+export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_parking_lot_02_Day
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_parking_lot_02_Day
 export PIPELINE_MODE="inference"
 
-export PREPROCESS_FOLDERS="sports_complex_03_Day"
+export PREPROCESS_FOLDERS="parking_lot_02_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_PROCESSED/09092025_0900_segcamel_train_output_epoch_50/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
 
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/
-cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/29082025_1140_segcamel_train_output_epoch_50/
+cp --verbose -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/09092025_0900_segcamel_train_output_epoch_50/
+cp --verbose -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/09092025_0900_segcamel_train_output_epoch_50/
