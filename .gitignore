@@ -206,3 +206,4 @@ hercules/dataset_download/client_secret.json
 hercules_error.txt
 hercules_output.txt
 lidar_camera_calibration.py
+logs/*
