@@ -548,7 +548,7 @@ def train(
 if __name__ == "__main__":
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
-
+    FEAT_MODE = os.getenv("FEAT_MODE", "rvi")  # "rvi", "rv", "none", etc.
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
@@ -559,6 +559,6 @@ if __name__ == "__main__":
         prefetch_factor=2,
         lr=2e-3,
         use_data_parallel=False,
-        feat_mode="rvi",
+        feat_mode=FEAT_MODE,
         voxel_size=0.10,
     )
