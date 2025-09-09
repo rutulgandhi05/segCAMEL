@@ -25,11 +25,11 @@ echo "[INFO] Dataset copied."
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_parking_lot_02_Day
-export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_parking_lot_02_Day
+export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_river_island_01_Day
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_river_island_01_Day
 export PIPELINE_MODE="inference"
 
-export PREPROCESS_FOLDERS="parking_lot_02_Day"
+export PREPROCESS_FOLDERS="river_island_01_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR

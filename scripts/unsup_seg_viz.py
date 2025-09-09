@@ -4,12 +4,17 @@ import numpy as np
 import torch
 import io
 import zipfile
+try:
+    import open3d as o3d
+    _HAS_O3D = True
+except Exception:
+    _HAS_O3D = False
 
 # ==============================
 # EDIT THESE CONSTANTS
 # ==============================
-INFER_DIR  = Path("data/29082025_1140_segcamel_train_output_epoch_50/29082025_1759_inference_output")
-OUT_DIR    = Path("data/29082025_1140_segcamel_train_output_epoch_50/29082025_1759_unsup_outputs")
+INFER_DIR  = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_1317_inference_output_parking_lot_02_Day")
+OUT_DIR    = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_1317_unsup_outputs_parking_lot_02_Day")
 K          = 10  # used for palette sizing only
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
@@ -28,69 +33,41 @@ PNG_W, PNG_H = 1600, 1200
 # Interactive Open3D toggles (used in both modes where relevant)
 DO_OPEN3D_VIEW = False  # if True in "labels" mode, opens window instead of headless snapshot
 
-# ==============================
-# Implementation
-# ==============================
+# Visualization knobs
+NOISE_LABEL = -1                  # must match your pipeline
+FADE_NON_VISIBLE = True           # default: gray-out points outside image mask
+FADE_COLOR = np.array([180, 180, 180], dtype=np.uint8)  # grey for non-visible
+NOISE_COLOR = np.array([128, 128, 128], dtype=np.uint8) # grey for noise label
 
-# Optional: Open3D (soft dependency)
-try:
-    import open3d as o3d
-    _HAS_O3D = True
-except Exception:
-    _HAS_O3D = False
+# ---------------- Palette & coloring ----------------
 
-
-def _make_palette(num_classes: int, seed: int = 0) -> np.ndarray:
-    num_classes = max(1, num_classes)
+def _make_palette(k: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
-    return (rng.uniform(60, 255, size=(num_classes, 3))).astype(np.uint8)
+    base = rng.integers(0, 255, size=(k, 3), dtype=np.uint8)
+    # ensure good spread and avoid very dark colors
+    base = np.maximum(base, 40)
+    return base
 
 
-def _labels_to_colors(labels: np.ndarray, palette: np.ndarray) -> np.ndarray:
+def _labels_to_colors(
+    labels: np.ndarray,
+    palette: np.ndarray,
+    noise_label: int = NOISE_LABEL
+) -> np.ndarray:
+    """Map labels -> RGB, with a dedicated gray for noise_label."""
     if labels.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
-    return (palette[labels % palette.shape[0]].astype(np.float32) / 255.0)
 
+    colors = np.empty((labels.size, 3), dtype=np.uint8)
+    noise_mask = (labels == noise_label)
 
-def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_path: Optional[Path]):
-    if not _HAS_O3D:
-        return
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
-    if rgb is not None and rgb.size:
-        pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
+    # clamp negatives to 0 to avoid modulo surprises
+    safe_lab = labels.copy()
+    safe_lab[safe_lab < 0] = 0
 
-    if DO_OPEN3D_VIEW:
-        o3d.visualization.draw_geometries([pcd], window_name=title)
-        return
-
-    if png_path is not None:
-        try:
-            vis = o3d.visualization.Visualizer()
-            vis.create_window(visible=False, width=PNG_W, height=PNG_H, window_name=title)
-            vis.add_geometry(pcd)
-            vis.get_render_option().point_size = 2.0
-            vis.update_renderer()
-            vis.capture_screen_image(str(png_path), do_render=True)
-            vis.destroy_window()
-        except Exception:
-            pass
-
-
-def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
-    rgb8 = (np.clip(rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
-    header = "\n".join([
-        "ply", "format ascii 1.0", f"element vertex {xyz.shape[0]}",
-        "property float x", "property float y", "property float z",
-        "property uchar red", "property uchar green", "property uchar blue",
-        "end_header"
-    ])
-    with open(path, "w") as f:
-        f.write(header + "\n")
-        for i in range(xyz.shape[0]):
-            r, g, b = int(rgb8[i, 0]), int(rgb8[i, 1]), int(rgb8[i, 2])
-            f.write(f"{xyz[i,0]:.6f} {xyz[i,1]:.6f} {xyz[i,2]:.6f} {r} {g} {b}\n")
-
+    colors[~noise_mask] = palette[safe_lab[~noise_mask] % palette.shape[0]]
+    colors[noise_mask]  = NOISE_COLOR
+    return colors.astype(np.float32) / 255.0
 
 # ---------------- ZIP/Dir label store helpers ---------------- #
 
@@ -123,7 +100,7 @@ def _zip_load_labels(zip_path: Path, name_in_zip: str) -> np.ndarray:
 # ---------------- Dump map (robust) ---------------- #
 
 def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
-    dumps = sorted(list(infer_dir.glob("*_inference.pth"))[:10])
+    dumps = sorted(list(infer_dir.glob("*_inference.pth")))
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
     for p in dumps:
@@ -147,12 +124,7 @@ def _resolve_dump_path(label_stem: str, by_filename: Dict[str, Path], by_payload
 # -------- Camera reset (version-agnostic) -------- #
 
 def _reset_camera(vis, pcd, zoom=0.7):
-    """
-    Robust camera reset that works across Open3D versions:
-    1) Try Visualizer.reset_view_point(True) if available.
-    2) Otherwise compute bbox and set lookat/front/up/zoom manually.
-    """
-    # Try Visualizer API (exists in many builds)
+    # Try Visualizer.reset_view_point if present
     try:
         if hasattr(vis, "reset_view_point"):
             vis.reset_view_point(True)
@@ -161,26 +133,43 @@ def _reset_camera(vis, pcd, zoom=0.7):
             return
     except Exception:
         pass
-
-    # Fallback: manual fit using bbox
+    # Fallback: manual fit
     try:
         bbox = pcd.get_axis_aligned_bounding_box()
         center = bbox.get_center()
-        extent = np.linalg.norm(bbox.get_extent()) + 1e-6
-
         ctr = vis.get_view_control()
-        # Reasonable defaults for LiDAR-like clouds
         ctr.set_lookat(center.tolist())
         ctr.set_front([0.0, 0.0, -1.0])
         ctr.set_up([0.0, -1.0, 0.0])
-        # Zoom ~ how tight the fit is; 0.35–0.8 usually fine
         ctr.set_zoom(zoom)
     except Exception:
-        # last resort: just try to update renderer
         pass
 
 
 # ---------------- Export: labels -> PLY/PNG ---------------- #
+
+def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
+    if not _HAS_O3D:
+        return
+    p = o3d.geometry.PointCloud()
+    p.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
+    p.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
+    o3d.io.write_point_cloud(str(path), p, write_ascii=False, compressed=True)
+
+def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_path: Optional[Path]):
+    if not _HAS_O3D:
+        return
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name=title, width=PNG_W, height=PNG_H, visible=True)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
+    pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
+    vis.add_geometry(pcd)
+    _reset_camera(vis, pcd, zoom=0.7)
+    vis.poll_events(); vis.update_renderer()
+    if png_path is not None:
+        o3d.io.write_image(str(png_path), vis.capture_screen_float_buffer(do_render=True))
+    vis.destroy_window()
 
 def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarray):
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -218,6 +207,12 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
         except Exception as e:
             print(f"[export] error loading {stem}: {e}")
             continue
+
+        # Defensive length check
+        if lab.shape[0] != coord.shape[0]:
+            n = min(lab.shape[0], coord.shape[0])
+            print(f"[export][warn] len(labels)={lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
+            lab = lab[:n]; coord = coord[:n]
 
         cols = _labels_to_colors(lab, palette)
 
@@ -262,6 +257,15 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
     if not stems:
         print("No overlapping frames found between inference dumps and labels (check naming).")
         return
+    
+    # stateful toggles
+    state = {
+        "i": 0,
+        "mode": "labels",    # "labels" or "range"
+        "fade": FADE_NON_VISIBLE,
+        "palette_seed": 0,
+        "palette": palette,
+    }
 
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name="Unsupervised Segmentation Viewer", width=win_w, height=win_h)
@@ -269,33 +273,71 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
     vis.add_geometry(pcd)
     ro = vis.get_render_option()
     ro.point_size = 2.0
-    idx = {"i": 0}
+
+    def _compute_colors(stem: str, payload, labels: np.ndarray) -> np.ndarray:
+        if state["mode"] == "range":
+            # grayscale by Euclidean distance
+            xyz = payload["coord_raw"].numpy().astype(np.float32)
+            r = np.linalg.norm(xyz, axis=1)
+            r = (r - r.min()) / (r.ptp() + 1e-6)
+            gray = np.stack([r, r, r], axis=1)
+            if state["fade"] and "mask" in payload:
+                mask = payload["mask"].numpy().astype(bool)
+                gray[~mask] = FADE_COLOR / 255.0
+            return gray.astype(np.float32)
+
+        # label coloring
+        cols = _labels_to_colors(labels, state["palette"])
+        if state["fade"] and "mask" in payload:
+            mask = payload["mask"].numpy().astype(bool)
+            cols[~mask] = FADE_COLOR / 255.0
+        return cols
 
     def load_frame(i: int):
-        stem = stems[i]
-        dump_path = _resolve_dump_path(stem, by_fn, by_pl)
-        coord = torch.load(dump_path, map_location="cpu")["coord_raw"].numpy().astype(np.float32)
-        lab   = load_labels(stem)
-        cols  = _labels_to_colors(lab, palette)
+            stem = stems[i]
+            dump_path = _resolve_dump_path(stem, by_fn, by_pl)
+            payload = torch.load(dump_path, map_location="cpu")
+            coord = payload["coord_raw"].numpy().astype(np.float32)
+            lab   = load_labels(stem)
 
-        pcd.points = o3d.utility.Vector3dVector(coord.astype(np.float64))
-        if cols.size:
-            pcd.colors = o3d.utility.Vector3dVector(cols.astype(np.float64))
-        vis.update_geometry(pcd)
+            # Defensive length check
+            if lab.shape[0] != coord.shape[0]:
+                n = min(lab.shape[0], coord.shape[0])
+                print(f"[o3d][warn] len(labels)={lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
+                lab = lab[:n]; coord = coord[:n]
 
-        # Robust camera reset (no more blank window)
-        _reset_camera(vis, pcd, zoom=0.7)
+            # (re)size palette if needed (max label can exceed K)
+            max_lab = int(lab[lab >= 0].max()) + 1 if (lab.size and (lab >= 0).any()) else K
+            if max_lab > state["palette"].shape[0]:
+                state["palette"] = _make_palette(max_lab, seed=state["palette_seed"])
 
-        vis.update_renderer()
-        vis.poll_events()
-        vis.get_render_option().point_size = ro.point_size
-        print(f"[o3d] frame {i+1}/{len(stems)}: {stem} (N={coord.shape[0]})")
+            cols  = _compute_colors(stem, payload, lab)
 
-    def next_frame(_): idx["i"] = (idx["i"] + 1) % len(stems); load_frame(idx["i"]); return False
-    def prev_frame(_): idx["i"] = (idx["i"] - 1) % len(stems); load_frame(idx["i"]); return False
+            pcd.points = o3d.utility.Vector3dVector(coord.astype(np.float64))
+            if cols.size:
+                pcd.colors = o3d.utility.Vector3dVector(cols.astype(np.float64))
+            vis.update_geometry(pcd)
+
+            _reset_camera(vis, pcd, zoom=0.7)
+            vis.update_renderer()
+            vis.poll_events()
+            vis.get_render_option().point_size = ro.point_size
+            print(f"[o3d] frame {i+1}/{len(stems)}: {stem} (N={coord.shape[0]}) mode={state['mode']} fade={state['fade']}")
+
+    def next_frame(_): state["i"] = (state["i"] + 1) % len(stems); load_frame(state["i"]); return False
+    def prev_frame(_): state["i"] = (state["i"] - 1) % len(stems); load_frame(state["i"]); return False
     def inc_ps(_): ro.point_size = min(ro.point_size + 1.0, 10.0); vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
     def dec_ps(_): ro.point_size = max(ro.point_size - 1.0, 1.0);  vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
-    def reset_v(_): _reset_camera(vis, pcd, zoom=0.7); return False  # patched
+    def reset_v(_): _reset_camera(vis, pcd, zoom=0.7); return False
+    def toggle_mode(_):
+        state["mode"] = "range" if state["mode"] == "labels" else "labels"
+        load_frame(state["i"]); return False
+    def toggle_fade(_):
+        state["fade"] = not state["fade"]; load_frame(state["i"]); return False
+    def cycle_palette(_):
+        state["palette_seed"] += 1
+        state["palette"] = _make_palette(max(K, state["palette"].shape[0]), seed=state["palette_seed"])
+        load_frame(state["i"]); return False
     def quit_v(_): return True
 
     vis.register_key_callback(ord("N"), next_frame)
@@ -303,9 +345,12 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
     vis.register_key_callback(ord("]"), inc_ps)
     vis.register_key_callback(ord("["), dec_ps)
     vis.register_key_callback(ord("R"), reset_v)
+    vis.register_key_callback(ord("G"), toggle_mode)   # labels <-> range
+    vis.register_key_callback(ord("V"), toggle_fade)   # fade non-visible
+    vis.register_key_callback(ord("C"), cycle_palette)
     vis.register_key_callback(ord("Q"), quit_v)
 
-    load_frame(idx["i"])
+    load_frame(state["i"])
     vis.run()
     vis.destroy_window()
 
