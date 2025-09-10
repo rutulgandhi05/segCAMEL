@@ -246,11 +246,15 @@ def load_hercules_dataset_folder(
     left_img_folder = _first_existing_path(dataset_folder / "Image" / "stereo_left", 
                                           dataset_folder / "Image" / "Stereo_left",
                                           dataset_folder / "Image" / "Left",
-                                          dataset_folder / "Image" / "left")
+                                          dataset_folder / "Image" / "left",
+                                          dataset_folder / "Image" / "L",
+                                          dataset_folder / "Image" / "l")
     right_img_folder = _first_existing_path(dataset_folder / "Image" / "stereo_right", 
                                            dataset_folder / "Image" / "Stereo_right",
                                            dataset_folder / "Image" / "Right",
-                                           dataset_folder / "Image" / "right")
+                                           dataset_folder / "Image" / "right",
+                                           dataset_folder / "Image" / "R",
+                                           dataset_folder / "Image" / "r")
 
 
     calib_folder = dataset_folder / "Calibration"
