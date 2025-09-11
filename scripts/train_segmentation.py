@@ -542,13 +542,13 @@ def train(
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
-    print("Training complete.")
-
 
 if __name__ == "__main__":
     DATA_DIR = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
     FEAT_MODE = os.getenv("FEAT_MODE", "rvi")  # "rvi", "rv", "none", etc.
+    RESULT_DIR = Path(os.getenv("RESULT_DIR"))
+
     train(
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
@@ -562,3 +562,13 @@ if __name__ == "__main__":
         feat_mode=FEAT_MODE,
         voxel_size=0.10,
     )
+
+    print(f"[INFO] Training finished. Checkpoints are in {TRAIN_CHECKPOINTS}")
+    print(f"[INFO] Writing config   to {RESULT_DIR}...")
+    with open(RESULT_DIR / "train_config.txt", "w") as f:
+        f.write(f"DATA_DIR={DATA_DIR}\n")
+        f.write(f"TRAIN_CHECKPOINTS={TRAIN_CHECKPOINTS}\n")
+        f.write(f"FEAT_MODE={FEAT_MODE}\n")
+        f.write(f"RESULT_DIR={RESULT_DIR}\n")
+
+    print("[INFO] Done.")

@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import io
 import zipfile
+
+from tqdm import tqdm
 try:
     import open3d as o3d
     _HAS_O3D = True
@@ -13,8 +15,8 @@ except Exception:
 # ==============================
 # EDIT THESE CONSTANTS
 # ==============================
-INFER_DIR  = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_1317_inference_output_parking_lot_02_Day")
-OUT_DIR    = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_1317_unsup_outputs_parking_lot_02_Day")
+INFER_DIR  = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_2155_inference_output_river_island_01_Day")
+OUT_DIR    = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_2155_unsup_outputs_river_island_01_Day")
 K          = 10  # used for palette sizing only
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
@@ -85,7 +87,7 @@ def _labels_store_exists() -> Tuple[bool, str]:
 def _zip_list_labels(zip_path: Path) -> Dict[str, str]:
     mapping = {}
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for n in zf.namelist():
+        for n in tqdm(zf.namelist(), desc="Listing labels in ZIP"):
             if n.endswith("_clusters.npz"):
                 stem = Path(n).stem.replace("_clusters", "")
                 mapping[stem] = n
@@ -103,7 +105,7 @@ def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]
     dumps = sorted(list(infer_dir.glob("*_inference.pth")))
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
-    for p in dumps:
+    for p in tqdm(dumps, desc="Building dump map"):
         try:
             payload = torch.load(p, map_location="cpu")
             s = payload.get("image_stem", None)
@@ -279,7 +281,7 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
             # grayscale by Euclidean distance
             xyz = payload["coord_raw"].numpy().astype(np.float32)
             r = np.linalg.norm(xyz, axis=1)
-            r = (r - r.min()) / (r.ptp() + 1e-6)
+            r = (r - r.min()) / (np.ptp(r) + 1e-6)
             gray = np.stack([r, r, r], axis=1)
             if state["fade"] and "mask" in payload:
                 mask = payload["mask"].numpy().astype(bool)
