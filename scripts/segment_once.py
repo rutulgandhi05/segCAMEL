@@ -273,7 +273,7 @@ def _apply_segmentation(centroids: torch.Tensor, kappa: Optional[torch.Tensor]):
         neighbor_range=NEIGHBOR_RANGE,
         min_component=MIN_COMPONENT,
         per_frame_hook=None,
-        collect_metrics=False,             # keep fast path; will return ONLY results
+        collect_metrics=True,             # keep fast path; will return ONLY results
         device=DEVICE,
         assign_chunk=ASSIGN_CHUNK,
         feature_cfg=FEATURE_CFG,

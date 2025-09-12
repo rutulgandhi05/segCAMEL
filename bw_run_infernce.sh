@@ -29,7 +29,7 @@ export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_ou
 export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_river_island_01_Day
 export PIPELINE_MODE="inference"
 
-export PREPROCESS_FOLDERS="river_island_01_Day"
+export PREPROCESS_FOLDERS="street_01_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
