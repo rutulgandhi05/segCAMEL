@@ -83,7 +83,7 @@ TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer d
 FEATURE_CFG = {
     "use_range":  True,  "range_scale": 100.0,
     "use_height": True,  "height_scale": 3.0,
-    "use_speed":  True,  "speed_scale": 30.0,
+    "use_speed":  False,  "speed_scale": 30.0,
 }
 
 # --- DataLoader I/O knobs ---
