@@ -207,3 +207,4 @@ hercules_error.txt
 hercules_output.txt
 lidar_camera_calibration.py
 logs/*
+analysis_figs/*

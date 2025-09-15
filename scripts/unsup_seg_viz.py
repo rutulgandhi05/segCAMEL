@@ -1,10 +1,8 @@
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Callable
 import numpy as np
 import torch
-import io
 import zipfile
-
 from tqdm import tqdm
 try:
     import open3d as o3d
@@ -12,15 +10,20 @@ try:
 except Exception:
     _HAS_O3D = False
 
-# ==============================
-# EDIT THESE CONSTANTS
-# ==============================
-INFER_DIR  = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_2155_inference_output_river_island_01_Day")
-OUT_DIR    = Path("data/09092025_0900_segcamel_train_output_epoch_50/09092025_2155_unsup_outputs_river_island_01_Day")
-K          = 10  # used for palette sizing only
+
+# ---- CURRENT run (the one you want to view) ----
+INFER_DIR  = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_inference_output_parking_lot_02_Day_nospd")
+OUT_DIR    = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day_nospd")
+K          = 10  # used only for initial palette sizing
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
-LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"   # viewer can read zipped labels too
-PREFER_ZIP = True                           # prefer reading labels from ZIP if it exists
+LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
+PREFER_ZIP = True
+
+# ---- REFERENCE labels (the run whose colors you want to copy) ----
+ALIGN_TO_REF   = True  # turn OFF to color current labels directly
+REF_LABELS_DIR = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day") / f"labels_k{K}"
+REF_LABELS_ZIP = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day") / f"labels_k{K}.zip"
+REF_PREFER_ZIP = True
 
 #   "labels" -> export saved labels to PLY and/or PNG (no interactive window)
 #   "o3d"    -> interactive Open3D viewer
@@ -32,51 +35,40 @@ SAVE_PNG = False
 PLY_LIMIT: Optional[int] = None  # set to an int to cap number of exported frames
 PNG_W, PNG_H = 1600, 1200
 
-# Interactive Open3D toggles (used in both modes where relevant)
-DO_OPEN3D_VIEW = False  # if True in "labels" mode, opens window instead of headless snapshot
-
 # Visualization knobs
-NOISE_LABEL = -1                  # must match your pipeline
-FADE_NON_VISIBLE = True           # default: gray-out points outside image mask
-FADE_COLOR = np.array([180, 180, 180], dtype=np.uint8)  # grey for non-visible
-NOISE_COLOR = np.array([128, 128, 128], dtype=np.uint8) # grey for noise label
+NOISE_LABEL = -1
+FADE_NON_VISIBLE = True
+FADE_COLOR  = np.array([180, 180, 180], dtype=np.uint8)
+NOISE_COLOR = np.array([128, 128, 128], dtype=np.uint8)
 
-# ---------------- Palette & coloring ----------------
-
+# ==============================
+# Palette & helper functions
+# ==============================
 def _make_palette(k: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     base = rng.integers(0, 255, size=(k, 3), dtype=np.uint8)
-    # ensure good spread and avoid very dark colors
-    base = np.maximum(base, 40)
+    base = np.maximum(base, 40)  # avoid near-black
     return base
 
-
-def _labels_to_colors(
-    labels: np.ndarray,
-    palette: np.ndarray,
-    noise_label: int = NOISE_LABEL
-) -> np.ndarray:
-    """Map labels -> RGB, with a dedicated gray for noise_label."""
+def _labels_to_colors(labels: np.ndarray, palette: np.ndarray, noise_label: int = NOISE_LABEL) -> np.ndarray:
     if labels.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
-
     colors = np.empty((labels.size, 3), dtype=np.uint8)
     noise_mask = (labels == noise_label)
-
-    # clamp negatives to 0 to avoid modulo surprises
     safe_lab = labels.copy()
     safe_lab[safe_lab < 0] = 0
-
-    colors[~noise_mask] = palette[safe_lab[~noise_mask] % palette.shape[0]]
+    idx = safe_lab % palette.shape[0]
+    colors[~noise_mask] = palette[idx[~noise_mask]]
     colors[noise_mask]  = NOISE_COLOR
     return colors.astype(np.float32) / 255.0
 
-# ---------------- ZIP/Dir label store helpers ---------------- #
-
-def _labels_store_exists() -> Tuple[bool, str]:
-    zip_ok = LABELS_ZIP.exists()
-    dir_ok = LABELS_DIR.exists()
-    if PREFER_ZIP and zip_ok:
+# ==============================
+# Label stores (dir/zip)
+# ==============================
+def _labels_store_exists(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tuple[bool, str]:
+    zip_ok = zip_path.exists()
+    dir_ok = dir_path.exists()
+    if prefer_zip and zip_ok:
         return True, "zip"
     if dir_ok:
         return True, "dir"
@@ -87,7 +79,7 @@ def _labels_store_exists() -> Tuple[bool, str]:
 def _zip_list_labels(zip_path: Path) -> Dict[str, str]:
     mapping = {}
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for n in tqdm(zf.namelist(), desc="Listing labels in ZIP"):
+        for n in zf.namelist():
             if n.endswith("_clusters.npz"):
                 stem = Path(n).stem.replace("_clusters", "")
                 mapping[stem] = n
@@ -99,13 +91,40 @@ def _zip_load_labels(zip_path: Path, name_in_zip: str) -> np.ndarray:
             with np.load(fh) as data:
                 return data["labels"].astype(np.int64)
 
-# ---------------- Dump map (robust) ---------------- #
+def _build_current_label_loader() -> Tuple[Callable[[str], np.ndarray], Dict[str, str], str]:
+    ok, mode = _labels_store_exists(LABELS_DIR, LABELS_ZIP, PREFER_ZIP)
+    if not ok:
+        raise FileNotFoundError(f"No labels found for CURRENT run (checked {LABELS_DIR} and {LABELS_ZIP}).")
+    if mode == "zip":
+        label_map = _zip_list_labels(LABELS_ZIP)
+        loader = lambda stem: _zip_load_labels(LABELS_ZIP, label_map[stem])
+    else:
+        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(LABELS_DIR.glob("*_clusters.npz"))}
+        def loader(stem: str) -> np.ndarray:
+            return np.load(label_map[stem])["labels"].astype(np.int64)
+    return loader, label_map, mode
 
+def _build_ref_label_loader() -> Tuple[Optional[Callable[[str], np.ndarray]], Dict[str, str], str]:
+    ok, mode = _labels_store_exists(REF_LABELS_DIR, REF_LABELS_ZIP, REF_PREFER_ZIP)
+    if not ok:
+        return None, {}, "none"
+    if mode == "zip":
+        label_map = _zip_list_labels(REF_LABELS_ZIP)
+        loader = lambda stem: _zip_load_labels(REF_LABELS_ZIP, label_map[stem])
+    else:
+        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(REF_LABELS_DIR.glob("*_clusters.npz"))}
+        def loader(stem: str) -> np.ndarray:
+            return np.load(label_map[stem])["labels"].astype(np.int64)
+    return loader, label_map, mode
+
+# ==============================
+# Inference dump mapping
+# ==============================
 def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
     dumps = sorted(list(infer_dir.glob("*_inference.pth")))
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
-    for p in tqdm(dumps, desc="Building dump map"):
+    for p in dumps:
         try:
             payload = torch.load(p, map_location="cpu")
             s = payload.get("image_stem", None)
@@ -115,18 +134,79 @@ def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]
             pass
     return by_filename, by_payload
 
-def _resolve_dump_path(label_stem: str, by_filename: Dict[str, Path], by_payload: Dict[str, Path]) -> Optional[Path]:
-    if label_stem in by_filename:
-        return by_filename[label_stem]
-    if label_stem in by_payload:
-        return by_payload[label_stem]
+def _resolve_dump_path(stem: str, by_filename: Dict[str, Path], by_payload: Dict[str, Path]) -> Optional[Path]:
+    if stem in by_filename: return by_filename[stem]
+    if stem in by_payload:  return by_payload[stem]
     return None
 
+# ==============================
+# Label alignment to reference
+# ==============================
+def _remap_to_reference(cur: np.ndarray, ref: np.ndarray, noise_label: int = NOISE_LABEL) -> np.ndarray:
+    """
+    Greedy overlap matching: map each current cluster ID to the reference cluster ID
+    with which it overlaps the most. Noise label is preserved as-is.
+    """
+    cur = cur.astype(np.int64)
+    ref = ref.astype(np.int64)
+    out = cur.copy()
 
-# -------- Camera reset (version-agnostic) -------- #
+    # indices where both are valid (>=0)
+    m = (cur >= 0) & (ref >= 0)
+    if not np.any(m):
+        return out  # nothing to map
 
+    cur_ids = np.unique(cur[m])
+    ref_ids = np.unique(ref[m])
+
+    # small contingency table with compact indices
+    cur_index = {c: i for i, c in enumerate(cur_ids)}
+    ref_index = {r: j for j, r in enumerate(ref_ids)}
+    C = np.zeros((len(cur_ids), len(ref_ids)), dtype=np.int64)
+
+    # accumulate overlaps
+    # (vectorized by building pairs)
+    pairs = np.stack([cur[m], ref[m]], axis=1)
+    # count by pairs
+    # (simple loop is okay; arrays are per-frame)
+    for c_id, r_id in pairs:
+        C[cur_index[c_id], ref_index[r_id]] += 1
+
+    # greedy assignment
+    mapping: Dict[int, int] = {}
+    C_work = C.copy()
+    used_rows = set()
+    used_cols = set()
+    while True:
+        # find max cell not used
+        best = None
+        best_val = 0
+        for i in range(C_work.shape[0]):
+            if i in used_rows: continue
+            for j in range(C_work.shape[1]):
+                if j in used_cols: continue
+                v = C_work[i, j]
+                if v > best_val:
+                    best_val = v
+                    best = (i, j)
+        if best is None or best_val == 0:
+            break
+        i, j = best
+        mapping[cur_ids[i]] = ref_ids[j]
+        used_rows.add(i); used_cols.add(j)
+
+    # apply mapping
+    for c_id, r_id in mapping.items():
+        out[cur == c_id] = r_id
+
+    # keep noise label untouched
+    out[cur == noise_label] = noise_label
+    return out
+
+# ==============================
+# Open3D helpers
+# ==============================
 def _reset_camera(vis, pcd, zoom=0.7):
-    # Try Visualizer.reset_view_point if present
     try:
         if hasattr(vis, "reset_view_point"):
             vis.reset_view_point(True)
@@ -135,32 +215,25 @@ def _reset_camera(vis, pcd, zoom=0.7):
             return
     except Exception:
         pass
-    # Fallback: manual fit
     try:
         bbox = pcd.get_axis_aligned_bounding_box()
-        center = bbox.get_center()
         ctr = vis.get_view_control()
-        ctr.set_lookat(center.tolist())
+        ctr.set_lookat(bbox.get_center().tolist())
         ctr.set_front([0.0, 0.0, -1.0])
         ctr.set_up([0.0, -1.0, 0.0])
         ctr.set_zoom(zoom)
     except Exception:
         pass
 
-
-# ---------------- Export: labels -> PLY/PNG ---------------- #
-
 def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
-    if not _HAS_O3D:
-        return
+    if not _HAS_O3D: return
     p = o3d.geometry.PointCloud()
     p.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
     p.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
     o3d.io.write_point_cloud(str(path), p, write_ascii=False, compressed=True)
 
 def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_path: Optional[Path]):
-    if not _HAS_O3D:
-        return
+    if not _HAS_O3D: return
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name=title, width=PNG_W, height=PNG_H, visible=True)
     pcd = o3d.geometry.PointCloud()
@@ -173,158 +246,154 @@ def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_pat
         o3d.io.write_image(str(png_path), vis.capture_screen_float_buffer(do_render=True))
     vis.destroy_window()
 
+# ==============================
+# Export mode (PLY/PNG)
+# ==============================
 def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarray):
     out_dir.mkdir(parents=True, exist_ok=True)
     ply_dir = out_dir / "ply"
     png_dir = out_dir / "png"
-    if SAVE_PLY:
-        ply_dir.mkdir(exist_ok=True)
-    if SAVE_PNG:
-        png_dir.mkdir(exist_ok=True)
+    if SAVE_PLY: ply_dir.mkdir(exist_ok=True)
+    if SAVE_PNG: png_dir.mkdir(exist_ok=True)
+
+    cur_loader, cur_map, _ = _build_current_label_loader()
+    ref_loader, ref_map, _ = _build_ref_label_loader() if ALIGN_TO_REF else (None, {}, "none")
 
     by_fn, by_pl = _build_dump_maps(infer_dir)
-
-    exists, mode = _labels_store_exists()
-    if not exists:
-        raise FileNotFoundError(f"No labels store found. Looked for dir={LABELS_DIR} and zip={LABELS_ZIP}")
-
-    if mode == "zip":
-        label_map = _zip_list_labels(LABELS_ZIP)  # stem -> name_in_zip
-        load_labels = lambda stem: _zip_load_labels(LABELS_ZIP, label_map[stem])
-    else:
-        label_map = {p.stem.replace("_clusters", ""): p for p in sorted(LABELS_DIR.glob("*_clusters.npz"))}
-        def load_labels(stem: str) -> np.ndarray:
-            return np.load(label_map[stem])["labels"].astype(np.int64)
-
     exported = 0
-    for stem in sorted(label_map.keys()):
+
+    for stem in sorted(cur_map.keys()):
         dump = _resolve_dump_path(stem, by_fn, by_pl)
         if dump is None:
             print(f"[export] missing dump for stem={stem}, skipping.")
             continue
 
         try:
-            lab = load_labels(stem)
-            coord = torch.load(dump, map_location="cpu")["coord_raw"].numpy().astype(np.float32)
+            cur_lab = cur_loader(stem)
+            payload = torch.load(dump, map_location="cpu")
+            coord   = payload["coord_raw"].numpy().astype(np.float32)
         except Exception as e:
             print(f"[export] error loading {stem}: {e}")
             continue
 
-        # Defensive length check
-        if lab.shape[0] != coord.shape[0]:
-            n = min(lab.shape[0], coord.shape[0])
-            print(f"[export][warn] len(labels)={lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
-            lab = lab[:n]; coord = coord[:n]
+        # defensive length check
+        if cur_lab.shape[0] != coord.shape[0]:
+            n = min(cur_lab.shape[0], coord.shape[0])
+            print(f"[export][warn] len(labels)={cur_lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
+            cur_lab = cur_lab[:n]; coord = coord[:n]
 
-        cols = _labels_to_colors(lab, palette)
+        # optional remap to reference IDs
+        if ALIGN_TO_REF and ref_loader is not None and stem in ref_map:
+            try:
+                ref_lab = ref_loader(stem)
+                if ref_lab.shape[0] != cur_lab.shape[0]:
+                    n = min(ref_lab.shape[0], cur_lab.shape[0])
+                    ref_lab = ref_lab[:n]; cur_lab = cur_lab[:n]; coord = coord[:n]
+                cur_lab = _remap_to_reference(cur_lab, ref_lab, noise_label=NOISE_LABEL)
+            except Exception as e:
+                print(f"[export][align] failed for {stem}: {e}")
+
+        # ensure palette large enough
+        max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
+        if max_label > palette.shape[0]:
+            palette = _make_palette(max_label, seed=0)
+
+        cols = _labels_to_colors(cur_lab, palette)
+        if FADE_NON_VISIBLE and "mask" in payload:
+            mask = payload["mask"].numpy().astype(bool)
+            cols[~mask] = FADE_COLOR / 255.0
 
         if SAVE_PLY:
             _save_ply(ply_dir / f"{stem}.ply", coord, cols)
-        if _HAS_O3D and (DO_OPEN3D_VIEW or SAVE_PNG):
-            png_path = (png_dir / f"{stem}.png") if SAVE_PNG else None
-            _o3d_show_and_snapshot(coord, cols, title=f"Seg: {stem}", png_path=png_path)
+        if _HAS_O3D and SAVE_PNG:
+            _o3d_show_and_snapshot(coord, cols, title=f"Seg: {stem}", png_path=png_dir / f"{stem}.png")
 
         exported += 1
         if PLY_LIMIT is not None and exported >= int(PLY_LIMIT):
             break
 
-    print(f"[export] done. exported={exported}, PLY={SAVE_PLY}, PNG={SAVE_PNG} (store={mode})")
+    print(f"[export] done. exported={exported}, PLY={SAVE_PLY}, PNG={SAVE_PNG}, align={ALIGN_TO_REF}")
 
-
-# ---------------- Interactive Open3D viewer ---------------- #
-
-def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=1200):
+# ==============================
+# Interactive viewer
+# ==============================
+def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_h=1200):
     if not _HAS_O3D:
         print("Open3D is not installed.")
         return
 
+    cur_loader, cur_map, _ = _build_current_label_loader()
+    ref_loader, ref_map, _ = _build_ref_label_loader() if ALIGN_TO_REF else (None, {}, "none")
     by_fn, by_pl = _build_dump_maps(infer_dir)
 
-    exists, mode = _labels_store_exists()
-    if not exists:
-        print(f"No labels found. Expected dir: {LABELS_DIR} or zip: {LABELS_ZIP}")
-        return
-
-    if mode == "zip":
-        label_map = _zip_list_labels(LABELS_ZIP)  # stem -> name_in_zip
-        load_labels = lambda stem: _zip_load_labels(LABELS_ZIP, label_map[stem])
-        label_stems = sorted(label_map.keys())
-    else:
-        label_map = {p.stem.replace("_clusters", ""): p for p in sorted(LABELS_DIR.glob("*_clusters.npz"))}
-        def load_labels(stem: str) -> np.ndarray:
-            return np.load(label_map[stem])["labels"].astype(np.int64)
-        label_stems = sorted(label_map.keys())
-
-    stems = [s for s in label_stems if _resolve_dump_path(s, by_fn, by_pl) is not None]
+    stems = [s for s in sorted(cur_map.keys()) if _resolve_dump_path(s, by_fn, by_pl) is not None]
     if not stems:
-        print("No overlapping frames found between inference dumps and labels (check naming).")
+        print("No overlapping frames found between inference dumps and labels.")
         return
-    
-    # stateful toggles
-    state = {
-        "i": 0,
-        "mode": "labels",    # "labels" or "range"
-        "fade": FADE_NON_VISIBLE,
-        "palette_seed": 0,
-        "palette": palette,
-    }
 
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name="Unsupervised Segmentation Viewer", width=win_w, height=win_h)
     pcd = o3d.geometry.PointCloud()
     vis.add_geometry(pcd)
-    ro = vis.get_render_option()
-    ro.point_size = 2.0
+    ro = vis.get_render_option(); ro.point_size = 2.0
 
-    def _compute_colors(stem: str, payload, labels: np.ndarray) -> np.ndarray:
+    state = {
+        "i": 0,
+        "mode": "labels",     # "labels" or "range"
+        "fade": FADE_NON_VISIBLE,
+        "palette": palette_init.copy(),
+        "palette_seed": 0
+    }
+
+    def _compute_colors(payload, labels: np.ndarray) -> np.ndarray:
         if state["mode"] == "range":
-            # grayscale by Euclidean distance
             xyz = payload["coord_raw"].numpy().astype(np.float32)
             r = np.linalg.norm(xyz, axis=1)
             r = (r - r.min()) / (np.ptp(r) + 1e-6)
-            gray = np.stack([r, r, r], axis=1)
-            if state["fade"] and "mask" in payload:
-                mask = payload["mask"].numpy().astype(bool)
-                gray[~mask] = FADE_COLOR / 255.0
-            return gray.astype(np.float32)
-
-        # label coloring
-        cols = _labels_to_colors(labels, state["palette"])
+            cols = np.stack([r, r, r], axis=1).astype(np.float32)
+        else:
+            cols = _labels_to_colors(labels, state["palette"])
         if state["fade"] and "mask" in payload:
             mask = payload["mask"].numpy().astype(bool)
             cols[~mask] = FADE_COLOR / 255.0
         return cols
 
     def load_frame(i: int):
-            stem = stems[i]
-            dump_path = _resolve_dump_path(stem, by_fn, by_pl)
-            payload = torch.load(dump_path, map_location="cpu")
-            coord = payload["coord_raw"].numpy().astype(np.float32)
-            lab   = load_labels(stem)
+        stem = stems[i]
+        dump_path = _resolve_dump_path(stem, by_fn, by_pl)
+        payload = torch.load(dump_path, map_location="cpu")
+        coord   = payload["coord_raw"].numpy().astype(np.float32)
+        cur_lab = cur_loader(stem)
 
-            # Defensive length check
-            if lab.shape[0] != coord.shape[0]:
-                n = min(lab.shape[0], coord.shape[0])
-                print(f"[o3d][warn] len(labels)={lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
-                lab = lab[:n]; coord = coord[:n]
+        # truncate lengths if needed
+        if cur_lab.shape[0] != coord.shape[0]:
+            n = min(cur_lab.shape[0], coord.shape[0])
+            cur_lab = cur_lab[:n]; coord = coord[:n]
 
-            # (re)size palette if needed (max label can exceed K)
-            max_lab = int(lab[lab >= 0].max()) + 1 if (lab.size and (lab >= 0).any()) else K
-            if max_lab > state["palette"].shape[0]:
-                state["palette"] = _make_palette(max_lab, seed=state["palette_seed"])
+        # optional remap to reference for consistent coloring
+        if ALIGN_TO_REF and ref_loader is not None and stem in ref_map:
+            try:
+                ref_lab = ref_loader(stem)
+                if ref_lab.shape[0] != cur_lab.shape[0]:
+                    n = min(ref_lab.shape[0], cur_lab.shape[0])
+                    ref_lab = ref_lab[:n]; cur_lab = cur_lab[:n]; coord = coord[:n]
+                cur_lab = _remap_to_reference(cur_lab, ref_lab, noise_label=NOISE_LABEL)
 
-            cols  = _compute_colors(stem, payload, lab)
+                # ensure palette large enough for reference IDs
+                max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
+                if max_label > state["palette"].shape[0]:
+                    state["palette"] = _make_palette(max_label, seed=state["palette_seed"])
+            except Exception as e:
+                print(f"[o3d][align] failed for {stem}: {e}")
 
-            pcd.points = o3d.utility.Vector3dVector(coord.astype(np.float64))
-            if cols.size:
-                pcd.colors = o3d.utility.Vector3dVector(cols.astype(np.float64))
-            vis.update_geometry(pcd)
-
-            _reset_camera(vis, pcd, zoom=0.7)
-            vis.update_renderer()
-            vis.poll_events()
-            vis.get_render_option().point_size = ro.point_size
-            print(f"[o3d] frame {i+1}/{len(stems)}: {stem} (N={coord.shape[0]}) mode={state['mode']} fade={state['fade']}")
+        pcd.points = o3d.utility.Vector3dVector(coord.astype(np.float64))
+        cols = _compute_colors(payload, cur_lab)
+        pcd.colors = o3d.utility.Vector3dVector(cols.astype(np.float64))
+        vis.update_geometry(pcd)
+        _reset_camera(vis, pcd, zoom=0.7)
+        vis.update_renderer(); vis.poll_events()
+        vis.get_render_option().point_size = ro.point_size
+        print(f"[o3d] frame {i+1}/{len(stems)}: {stem} mode={state['mode']} fade={state['fade']} align={ALIGN_TO_REF}")
 
     def next_frame(_): state["i"] = (state["i"] + 1) % len(stems); load_frame(state["i"]); return False
     def prev_frame(_): state["i"] = (state["i"] - 1) % len(stems); load_frame(state["i"]); return False
@@ -334,11 +403,12 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
     def toggle_mode(_):
         state["mode"] = "range" if state["mode"] == "labels" else "labels"
         load_frame(state["i"]); return False
-    def toggle_fade(_):
-        state["fade"] = not state["fade"]; load_frame(state["i"]); return False
+    def toggle_fade(_): state["fade"] = not state["fade"]; load_frame(state["i"]); return False
     def cycle_palette(_):
         state["palette_seed"] += 1
-        state["palette"] = _make_palette(max(K, state["palette"].shape[0]), seed=state["palette_seed"])
+        # keep size; just reseed for a different look
+        sz = max(K, state["palette"].shape[0])
+        state["palette"] = _make_palette(sz, seed=state["palette_seed"])
         load_frame(state["i"]); return False
     def quit_v(_): return True
 
@@ -356,48 +426,40 @@ def _view_labels_o3d(infer_dir: Path, palette: np.ndarray, win_w=1600, win_h=120
     vis.run()
     vis.destroy_window()
 
-
-# ---------------- Sanity + main ---------------- #
-
+# ==============================
+# Sanity + main
+# ==============================
 def _count_infer() -> int:
     return len(list(INFER_DIR.glob("*_inference.pth")))
 
-def _count_labels() -> Tuple[int, str]:
-    if PREFER_ZIP and LABELS_ZIP.exists():
+def _count_labels(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tuple[int, str]:
+    ok, mode = _labels_store_exists(dir_path, zip_path, prefer_zip)
+    if not ok: return 0, "none"
+    if mode == "zip":
         try:
-            with zipfile.ZipFile(LABELS_ZIP, "r") as zf:
+            with zipfile.ZipFile(zip_path, "r") as zf:
                 return sum(1 for n in zf.namelist() if n.endswith("_clusters.npz")), "zip"
         except Exception:
             return 0, "zip"
-    if LABELS_DIR.exists():
-        return len(list(LABELS_DIR.glob("*_clusters.npz"))), "dir"
-    if LABELS_ZIP.exists():
-        try:
-            with zipfile.ZipFile(LABELS_ZIP, "r") as zf:
-                return sum(1 for n in zf.namelist() if n.endswith("_clusters.npz")), "zip"
-        except Exception:
-            return 0, "zip"
-    return 0, "none"
+    else:
+        return len(list(dir_path.glob("*_clusters.npz"))), "dir"
 
 def _sanity_print():
     n_inf = _count_infer()
-    n_lbl, store = _count_labels()
-    print(f"[paths] INFER_DIR = {INFER_DIR}  ({n_inf} dumps)")
-    if store == "dir":
-        print(f"[paths] LABELS_DIR = {LABELS_DIR} ({n_lbl} label files)")
-    elif store == "zip":
-        print(f"[paths] LABELS_ZIP = {LABELS_ZIP} ({n_lbl} label entries)")
-    else:
-        print(f"[paths] No labels found (checked {LABELS_DIR} and {LABELS_ZIP})")
-    print(f"[mode ] VIEW_MODE = {VIEW_MODE} | PLY={SAVE_PLY} PNG={SAVE_PNG} O3D={_HAS_O3D} | store={store}")
+    n_cur, cur_store = _count_labels(LABELS_DIR, LABELS_ZIP, PREFER_ZIP)
+    print(f"[paths] INFER_DIR   = {INFER_DIR}  ({n_inf} dumps)")
+    print(f"[paths] CUR labels  = {LABELS_DIR if cur_store=='dir' else LABELS_ZIP} ({n_cur} files) store={cur_store}")
+    if ALIGN_TO_REF:
+        n_ref, ref_store = _count_labels(REF_LABELS_DIR, REF_LABELS_ZIP, REF_PREFER_ZIP)
+        print(f"[paths] REF labels  = {REF_LABELS_DIR if ref_store=='dir' else REF_LABELS_ZIP} ({n_ref} files) store={ref_store}")
+    print(f"[mode ] VIEW_MODE={VIEW_MODE} | SAVE_PLY={SAVE_PLY} SAVE_PNG={SAVE_PNG} O3D={_HAS_O3D} align={ALIGN_TO_REF}")
 
 def main():
     if not INFER_DIR.exists():
         raise FileNotFoundError(f"INFER_DIR not found: {INFER_DIR}")
-
     _sanity_print()
 
-    palette = _make_palette(K)
+    palette = _make_palette(K, seed=0)
 
     if VIEW_MODE == "labels":
         _export_labels_to_ply_png(INFER_DIR, OUT_DIR, palette)
@@ -407,7 +469,6 @@ def main():
         return
 
     raise ValueError(f"Unknown VIEW_MODE={VIEW_MODE} (use 'labels' or 'o3d').")
-
 
 if __name__ == "__main__":
     main()
