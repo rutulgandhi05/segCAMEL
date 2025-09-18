@@ -34,12 +34,12 @@ export PREPROCESS_FOLDERS="street_01_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
 
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp  -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/
-cp  -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/
+cp  -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
+cp  -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
 
 echo "[INFO] Job completed successfully."

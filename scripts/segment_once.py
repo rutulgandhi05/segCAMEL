@@ -32,7 +32,7 @@ CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
 INFERENCE_BATCH   = 4
 INFERENCE_WORKERS = 12
 VOXEL_SIZE        = 0.10
-FEAT_MODE         = "rvi"   # "none"|"ri"|"v"|"rvi" (must match training)
+FEAT_MODE         = "ri"   # "none"|"ri"|"v"|"rvi" (must match training)
 
 # --- Prototype learning (quality-first defaults) ---
 MAX_PASSES        = 3
@@ -83,7 +83,7 @@ TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer d
 FEATURE_CFG = {
     "use_range":  True,  "range_scale": 100.0,
     "use_height": True,  "height_scale": 3.0,
-    "use_speed":  True,  "speed_scale": 60.0,
+    "use_speed":  False,  "speed_scale": 60.0,
 }
 
 # --- DataLoader I/O knobs ---
