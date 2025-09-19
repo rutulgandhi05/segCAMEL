@@ -239,6 +239,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         "zip_mode": "w",
         "dist_edges": DIST_EDGES,
         "dist_ratios": ALIGNED_DIST_RATIOS,
+        "inference limit": INFERENCE_LIMIT,
     })
     print(f"[segment_once] Saved prototypes -> {PROTOS_PATH}  ({time.time()-t0:.1f}s)")
     return mu, kappa
