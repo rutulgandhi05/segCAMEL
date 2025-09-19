@@ -34,7 +34,7 @@ export PREPROCESS_FOLDERS="street_01_Day"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvvi/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
 
 python -m scripts.preprocess
 python -m scripts.segment_once
