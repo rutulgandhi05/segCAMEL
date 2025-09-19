@@ -31,6 +31,7 @@ DATA_DIR          = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
 CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
 INFERENCE_BATCH   = 4
 INFERENCE_WORKERS = 12
+INFERENCE_LIMIT   = 5000   # set to an integer for quick testing (e.g. 10); None → all
 VOXEL_SIZE        = 0.10
 FEAT_MODE         = "ri"   # "none"|"ri"|"v"|"rvi" (must match training)
 
@@ -38,7 +39,7 @@ FEAT_MODE         = "ri"   # "none"|"ri"|"v"|"rvi" (must match training)
 MAX_PASSES        = 3
 SAMPLE_PER_FRAME  = 50_000
 USE_FP16_MATMUL   = True
-SEED              = 0
+SEED              = 42
 DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]   # 5 edges → 4 bins
 
 # NOTE: user-tuned defaults (may have wrong length); we auto-fix below
@@ -159,6 +160,7 @@ def _maybe_run_inference():
         workers=INFERENCE_WORKERS,
         device=DEVICE,
         feat_mode=FEAT_MODE,
+        limit=INFERENCE_LIMIT
     )
     print(f"[segment_once] Inference done in {time.time()-t0:.1f}s")
 
@@ -320,7 +322,7 @@ def _compute_metrics(accum):
         accum,
         out_csv=METRICS_CSV,
         sample_n=50_000,
-        seed=42,
+        seed=SEED,
         q_bins=4,
         tau_list=[0.2, 0.4, 0.6],
         tau_policy="quantile",

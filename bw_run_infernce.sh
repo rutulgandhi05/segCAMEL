@@ -6,7 +6,7 @@
 #SBATCH -c 16
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 20:00:00
+#SBATCH -t 30:00:00
 #SBATCH -p gpu_a100_il
 #SBATCH --gres=gpu:1
 #SBATCH --mail-type ALL
@@ -39,7 +39,7 @@ cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp  -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
-cp  -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
+cp -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
+cp -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_ri/
 
 echo "[INFO] Job completed successfully."

@@ -1,3 +1,4 @@
+import itertools
 import os
 import csv
 import datetime
@@ -282,6 +283,7 @@ def run_inference(
     workers: int = 8,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     feat_mode: str = "rvi",   # "none" | "ri" | "v" | "rvi"
+    limit: Optional[int] = None,
 ):
     """
     Runs PTv3 forward (image-free) with the exact preprocessing used in training and
@@ -306,6 +308,10 @@ def run_inference(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = InferenceDataset(data_dir, voxel_size=voxel_size)
+
+    if limit is not None and limit > 0:
+        dataset.files = dataset.files[:limit]
+        print(f"[inference] Limiting to first {limit} samples.") 
     try:
         dataset_len = len(dataset)
     except Exception:

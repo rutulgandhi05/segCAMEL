@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import zipfile
 from tqdm import tqdm
+from datetime import datetime
+
 try:
     import open3d as o3d
     _HAS_O3D = True
@@ -12,8 +14,8 @@ except Exception:
 
 
 # ---- CURRENT run (the one you want to view) ----
-INFER_DIR  = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_inference_output_parking_lot_02_Day_nospd")
-OUT_DIR    = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day_nospd")
+INFER_DIR  = Path(r"data\11092025_1205_segcamel_train_output_epoch_50_rvi\17092025_0246_inference_output_street_01_Day")
+OUT_DIR    = Path(r"data\11092025_1205_segcamel_train_output_epoch_50_rvi\17092025_0246_unsup_outputs_street_01_Day")
 K          = 10  # used only for initial palette sizing
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
@@ -21,8 +23,8 @@ PREFER_ZIP = True
 
 # ---- REFERENCE labels (the run whose colors you want to copy) ----
 ALIGN_TO_REF   = True  # turn OFF to color current labels directly
-REF_LABELS_DIR = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day") / f"labels_k{K}"
-REF_LABELS_ZIP = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day") / f"labels_k{K}.zip"
+REF_LABELS_DIR = OUT_DIR / f"labels_k{K}"
+REF_LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
 REF_PREFER_ZIP = True
 
 #   "labels" -> export saved labels to PLY and/or PNG (no interactive window)
@@ -41,10 +43,19 @@ FADE_NON_VISIBLE = True
 FADE_COLOR  = np.array([180, 180, 180], dtype=np.uint8)
 NOISE_COLOR = np.array([128, 128, 128], dtype=np.uint8)
 
+# Debug / logging
+VERBOSE = True  # flip to False to quiet logs
+
+def _dbg(msg: str):
+    if VERBOSE:
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] {msg}")
+
 # ==============================
 # Palette & helper functions
 # ==============================
 def _make_palette(k: int, seed: int = 0) -> np.ndarray:
+    _dbg(f"Creating palette of size {k} with seed {seed}")
     rng = np.random.default_rng(seed)
     base = rng.integers(0, 255, size=(k, 3), dtype=np.uint8)
     base = np.maximum(base, 40)  # avoid near-black
@@ -52,6 +63,7 @@ def _make_palette(k: int, seed: int = 0) -> np.ndarray:
 
 def _labels_to_colors(labels: np.ndarray, palette: np.ndarray, noise_label: int = NOISE_LABEL) -> np.ndarray:
     if labels.size == 0:
+        _dbg("labels_to_colors: empty labels array")
         return np.zeros((0, 3), dtype=np.float32)
     colors = np.empty((labels.size, 3), dtype=np.uint8)
     noise_mask = (labels == noise_label)
@@ -68,6 +80,7 @@ def _labels_to_colors(labels: np.ndarray, palette: np.ndarray, noise_label: int 
 def _labels_store_exists(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tuple[bool, str]:
     zip_ok = zip_path.exists()
     dir_ok = dir_path.exists()
+    _dbg(f"Labels store check: prefer_zip={prefer_zip} dir_ok={dir_ok} zip_ok={zip_ok}")
     if prefer_zip and zip_ok:
         return True, "zip"
     if dir_ok:
@@ -78,66 +91,92 @@ def _labels_store_exists(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tu
 
 def _zip_list_labels(zip_path: Path) -> Dict[str, str]:
     mapping = {}
+    _dbg(f"Listing labels in zip: {zip_path}")
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for n in zf.namelist():
+        for n in tqdm(zf.namelist(), desc="Zip entries", leave=False):
             if n.endswith("_clusters.npz"):
                 stem = Path(n).stem.replace("_clusters", "")
                 mapping[stem] = n
+    _dbg(f"Found {len(mapping)} *_clusters.npz in zip")
     return mapping
 
 def _zip_load_labels(zip_path: Path, name_in_zip: str) -> np.ndarray:
+    _dbg(f"Loading labels from zip: {zip_path} :: {name_in_zip}")
     with zipfile.ZipFile(zip_path, "r") as zf:
         with zf.open(name_in_zip, "r") as fh:
             with np.load(fh) as data:
-                return data["labels"].astype(np.int64)
+                arr = data["labels"].astype(np.int64)
+                _dbg(f"Loaded labels shape={arr.shape}, dtype={arr.dtype}")
+                return arr
 
 def _build_current_label_loader() -> Tuple[Callable[[str], np.ndarray], Dict[str, str], str]:
     ok, mode = _labels_store_exists(LABELS_DIR, LABELS_ZIP, PREFER_ZIP)
     if not ok:
         raise FileNotFoundError(f"No labels found for CURRENT run (checked {LABELS_DIR} and {LABELS_ZIP}).")
+    _dbg(f"Current label store mode: {mode}")
     if mode == "zip":
         label_map = _zip_list_labels(LABELS_ZIP)
         loader = lambda stem: _zip_load_labels(LABELS_ZIP, label_map[stem])
     else:
-        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(LABELS_DIR.glob("*_clusters.npz"))}
+        label_map = {}
+        for p in tqdm(sorted(LABELS_DIR.glob("*_clusters.npz")), desc="Index labels (dir)", leave=False):
+            label_map[p.stem.replace("_clusters", "")] = str(p)
         def loader(stem: str) -> np.ndarray:
-            return np.load(label_map[stem])["labels"].astype(np.int64)
+            _dbg(f"Loading labels from dir: {label_map[stem]}")
+            arr = np.load(label_map[stem])["labels"].astype(np.int64)
+            _dbg(f"Loaded labels shape={arr.shape}, dtype={arr.dtype}")
+            return arr
+    _dbg(f"Indexed {len(label_map)} label files (current)")
     return loader, label_map, mode
 
 def _build_ref_label_loader() -> Tuple[Optional[Callable[[str], np.ndarray]], Dict[str, str], str]:
     ok, mode = _labels_store_exists(REF_LABELS_DIR, REF_LABELS_ZIP, REF_PREFER_ZIP)
     if not ok:
+        _dbg("No reference labels store available")
         return None, {}, "none"
+    _dbg(f"Reference label store mode: {mode}")
     if mode == "zip":
         label_map = _zip_list_labels(REF_LABELS_ZIP)
         loader = lambda stem: _zip_load_labels(REF_LABELS_ZIP, label_map[stem])
     else:
-        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(REF_LABELS_DIR.glob("*_clusters.npz"))}
+        label_map = {}
+        for p in tqdm(sorted(REF_LABELS_DIR.glob("*_clusters.npz")), desc="Index REF labels (dir)", leave=False):
+            label_map[p.stem.replace("_clusters", "")] = str(p)
         def loader(stem: str) -> np.ndarray:
-            return np.load(label_map[stem])["labels"].astype(np.int64)
+            _dbg(f"Loading REF labels from dir: {label_map[stem]}")
+            arr = np.load(label_map[stem])["labels"].astype(np.int64)
+            _dbg(f"Loaded REF labels shape={arr.shape}, dtype={arr.dtype}")
+            return arr
+    _dbg(f"Indexed {len(label_map)} label files (reference)")
     return loader, label_map, mode
 
 # ==============================
 # Inference dump mapping
 # ==============================
 def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
+    _dbg(f"Building dump maps from: {infer_dir}")
     dumps = sorted(list(infer_dir.glob("*_inference.pth")))
+    _dbg(f"Found {len(dumps)} inference dumps")
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
-    for p in dumps:
+    for p in tqdm(dumps, desc="Scan dumps for payload stems", leave=False):
         try:
             payload = torch.load(p, map_location="cpu")
             s = payload.get("image_stem", None)
             if isinstance(s, str):
                 by_payload[s] = p
-        except Exception:
-            pass
+        except Exception as e:
+            _dbg(f"Failed reading dump {p.name}: {e}")
+    _dbg(f"Payload stems mapped: {len(by_payload)}")
     return by_filename, by_payload
 
 def _resolve_dump_path(stem: str, by_filename: Dict[str, Path], by_payload: Dict[str, Path]) -> Optional[Path]:
-    if stem in by_filename: return by_filename[stem]
-    if stem in by_payload:  return by_payload[stem]
-    return None
+    path = by_filename.get(stem) or by_payload.get(stem)
+    if path is None:
+        _dbg(f"Resolve dump path: stem '{stem}' NOT FOUND")
+    else:
+        _dbg(f"Resolve dump path: stem '{stem}' -> {path.name}")
+    return path
 
 # ==============================
 # Label alignment to reference
@@ -147,38 +186,36 @@ def _remap_to_reference(cur: np.ndarray, ref: np.ndarray, noise_label: int = NOI
     Greedy overlap matching: map each current cluster ID to the reference cluster ID
     with which it overlaps the most. Noise label is preserved as-is.
     """
+    _dbg("Remapping current labels to reference IDs (greedy overlap)")
     cur = cur.astype(np.int64)
     ref = ref.astype(np.int64)
     out = cur.copy()
 
-    # indices where both are valid (>=0)
     m = (cur >= 0) & (ref >= 0)
     if not np.any(m):
-        return out  # nothing to map
+        _dbg("No valid overlaps to map (all labels < 0).")
+        return out
 
     cur_ids = np.unique(cur[m])
     ref_ids = np.unique(ref[m])
+    _dbg(f"Unique IDs – cur: {len(cur_ids)}, ref: {len(ref_ids)}")
 
-    # small contingency table with compact indices
     cur_index = {c: i for i, c in enumerate(cur_ids)}
     ref_index = {r: j for j, r in enumerate(ref_ids)}
     C = np.zeros((len(cur_ids), len(ref_ids)), dtype=np.int64)
 
-    # accumulate overlaps
-    # (vectorized by building pairs)
     pairs = np.stack([cur[m], ref[m]], axis=1)
-    # count by pairs
-    # (simple loop is okay; arrays are per-frame)
-    for c_id, r_id in pairs:
+    _dbg(f"Accumulating overlaps for {pairs.shape[0]} label pairs")
+    for c_id, r_id in tqdm(pairs, desc="Count overlaps", leave=False):
         C[cur_index[c_id], ref_index[r_id]] += 1
 
-    # greedy assignment
     mapping: Dict[int, int] = {}
     C_work = C.copy()
     used_rows = set()
     used_cols = set()
+
+    _dbg("Starting greedy assignment")
     while True:
-        # find max cell not used
         best = None
         best_val = 0
         for i in range(C_work.shape[0]):
@@ -194,13 +231,13 @@ def _remap_to_reference(cur: np.ndarray, ref: np.ndarray, noise_label: int = NOI
         i, j = best
         mapping[cur_ids[i]] = ref_ids[j]
         used_rows.add(i); used_cols.add(j)
+        _dbg(f"Map cur {cur_ids[i]} -> ref {ref_ids[j]} (overlap={best_val})")
 
-    # apply mapping
-    for c_id, r_id in mapping.items():
+    for c_id, r_id in tqdm(mapping.items(), desc="Apply mapping", leave=False):
         out[cur == c_id] = r_id
 
-    # keep noise label untouched
     out[cur == noise_label] = noise_label
+    _dbg(f"Remap complete. Mapping size={len(mapping)}")
     return out
 
 # ==============================
@@ -227,6 +264,7 @@ def _reset_camera(vis, pcd, zoom=0.7):
 
 def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
     if not _HAS_O3D: return
+    _dbg(f"Saving PLY: {path}")
     p = o3d.geometry.PointCloud()
     p.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
     p.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
@@ -234,6 +272,7 @@ def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
 
 def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_path: Optional[Path]):
     if not _HAS_O3D: return
+    _dbg(f"Open3D snapshot: title='{title}' save={'yes' if png_path else 'no'}")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name=title, width=PNG_W, height=PNG_H, visible=True)
     pcd = o3d.geometry.PointCloud()
@@ -250,6 +289,7 @@ def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_pat
 # Export mode (PLY/PNG)
 # ==============================
 def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarray):
+    _dbg(f"Exporting labels to PLY/PNG. out_dir={out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
     ply_dir = out_dir / "ply"
     png_dir = out_dir / "png"
@@ -262,7 +302,7 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
     by_fn, by_pl = _build_dump_maps(infer_dir)
     exported = 0
 
-    for stem in sorted(cur_map.keys()):
+    for stem in tqdm(sorted(cur_map.keys()), desc="Export frames", unit="frame"):
         dump = _resolve_dump_path(stem, by_fn, by_pl)
         if dump is None:
             print(f"[export] missing dump for stem={stem}, skipping.")
@@ -272,17 +312,16 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
             cur_lab = cur_loader(stem)
             payload = torch.load(dump, map_location="cpu")
             coord   = payload["coord_raw"].numpy().astype(np.float32)
+            _dbg(f"Loaded frame '{stem}': labels={cur_lab.shape[0]} points={coord.shape[0]}")
         except Exception as e:
             print(f"[export] error loading {stem}: {e}")
             continue
 
-        # defensive length check
         if cur_lab.shape[0] != coord.shape[0]:
             n = min(cur_lab.shape[0], coord.shape[0])
             print(f"[export][warn] len(labels)={cur_lab.shape[0]} != N={coord.shape[0]} → truncating to {n}.")
             cur_lab = cur_lab[:n]; coord = coord[:n]
 
-        # optional remap to reference IDs
         if ALIGN_TO_REF and ref_loader is not None and stem in ref_map:
             try:
                 ref_lab = ref_loader(stem)
@@ -293,9 +332,9 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
             except Exception as e:
                 print(f"[export][align] failed for {stem}: {e}")
 
-        # ensure palette large enough
         max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
         if max_label > palette.shape[0]:
+            _dbg(f"Palette too small ({palette.shape[0]}), resizing to {max_label}")
             palette = _make_palette(max_label, seed=0)
 
         cols = _labels_to_colors(cur_lab, palette)
@@ -310,6 +349,7 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
 
         exported += 1
         if PLY_LIMIT is not None and exported >= int(PLY_LIMIT):
+            _dbg(f"PLY_LIMIT reached: {PLY_LIMIT}")
             break
 
     print(f"[export] done. exported={exported}, PLY={SAVE_PLY}, PNG={SAVE_PNG}, align={ALIGN_TO_REF}")
@@ -330,6 +370,7 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     if not stems:
         print("No overlapping frames found between inference dumps and labels.")
         return
+    _dbg(f"Viewer initialized with {len(stems)} frame(s). First: {stems[0]}")
 
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name="Unsupervised Segmentation Viewer", width=win_w, height=win_h)
@@ -361,16 +402,16 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     def load_frame(i: int):
         stem = stems[i]
         dump_path = _resolve_dump_path(stem, by_fn, by_pl)
+        _dbg(f"[viewer] Loading frame {i+1}/{len(stems)}: {stem}")
         payload = torch.load(dump_path, map_location="cpu")
         coord   = payload["coord_raw"].numpy().astype(np.float32)
         cur_lab = cur_loader(stem)
 
-        # truncate lengths if needed
         if cur_lab.shape[0] != coord.shape[0]:
             n = min(cur_lab.shape[0], coord.shape[0])
+            _dbg(f"[viewer] Truncating: labels={cur_lab.shape[0]} points={coord.shape[0]} -> {n}")
             cur_lab = cur_lab[:n]; coord = coord[:n]
 
-        # optional remap to reference for consistent coloring
         if ALIGN_TO_REF and ref_loader is not None and stem in ref_map:
             try:
                 ref_lab = ref_loader(stem)
@@ -379,9 +420,9 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
                     ref_lab = ref_lab[:n]; cur_lab = cur_lab[:n]; coord = coord[:n]
                 cur_lab = _remap_to_reference(cur_lab, ref_lab, noise_label=NOISE_LABEL)
 
-                # ensure palette large enough for reference IDs
                 max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
                 if max_label > state["palette"].shape[0]:
+                    _dbg(f"[viewer] Grow palette to {max_label}")
                     state["palette"] = _make_palette(max_label, seed=state["palette_seed"])
             except Exception as e:
                 print(f"[o3d][align] failed for {stem}: {e}")
@@ -402,15 +443,16 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     def reset_v(_): _reset_camera(vis, pcd, zoom=0.7); return False
     def toggle_mode(_):
         state["mode"] = "range" if state["mode"] == "labels" else "labels"
+        _dbg(f"[viewer] Toggle mode -> {state['mode']}")
         load_frame(state["i"]); return False
-    def toggle_fade(_): state["fade"] = not state["fade"]; load_frame(state["i"]); return False
+    def toggle_fade(_): state["fade"] = not state["fade"]; _dbg(f"[viewer] Toggle fade -> {state['fade']}"); load_frame(state["i"]); return False
     def cycle_palette(_):
         state["palette_seed"] += 1
-        # keep size; just reseed for a different look
         sz = max(K, state["palette"].shape[0])
+        _dbg(f"[viewer] Cycle palette seed -> {state['palette_seed']} (size {sz})")
         state["palette"] = _make_palette(sz, seed=state["palette_seed"])
         load_frame(state["i"]); return False
-    def quit_v(_): return True
+    def quit_v(_): _dbg("[viewer] Quit requested"); return True
 
     vis.register_key_callback(ord("N"), next_frame)
     vis.register_key_callback(ord("P"), prev_frame)
