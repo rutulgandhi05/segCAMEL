@@ -31,7 +31,7 @@ DATA_DIR          = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
 CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINT_PTH"))
 INFERENCE_BATCH   = 4
 INFERENCE_WORKERS = 12
-INFERENCE_LIMIT   = 2000   # set to an integer for quick testing (e.g. 10); None → all
+INFERENCE_LIMIT   = None   # set to an integer for quick testing (e.g. 10); None → all
 VOXEL_SIZE        = 0.10
 FEAT_MODE         = Path(os.getenv("FEAT_MODE"))   # "none"|"ri"|"v"|"rvi" (must match training)
 
