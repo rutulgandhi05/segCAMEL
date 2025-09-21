@@ -84,7 +84,7 @@ TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer d
 FEATURE_CFG = {
     "use_range":  False,  "range_scale": 120.0,
     "use_height": False,  "height_scale": 3.0,
-    "use_speed":  True,   "speed_scale": 25.0,
+    "use_speed":  False,   "speed_scale": 25.0,
     # dead-zone parameters for speed (tune if needed)
     "speed_deadzone_per_m": 0.03,   # m/s per meter
     "speed_deadzone_min":   0.15,   # m/s
