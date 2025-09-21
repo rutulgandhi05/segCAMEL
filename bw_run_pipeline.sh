@@ -28,7 +28,7 @@ export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export PREPROCESS_FOLDERS="mountain_01_Day,library_01_Day,sports_complex_01_Day,stream_01_Day"
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
-export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output_epoch_50_rvi
+export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output_epoch_50_$FEAT_MODE
 
 mkdir -p $PREPROCESS_OUTPUT_DIR
 mkdir -p $TRAIN_CHECKPOINTS

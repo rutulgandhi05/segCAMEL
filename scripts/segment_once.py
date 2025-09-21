@@ -28,12 +28,12 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # --- Inference settings (only used if RUN_INFERENCE=True) ---
 DATA_DIR          = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
-CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINTS")) / "best_model.pth"
+CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINT_PTH"))
 INFERENCE_BATCH   = 4
 INFERENCE_WORKERS = 12
 INFERENCE_LIMIT   = 2000   # set to an integer for quick testing (e.g. 10); None → all
 VOXEL_SIZE        = 0.10
-FEAT_MODE         = "ri"   # "none"|"ri"|"v"|"rvi" (must match training)
+FEAT_MODE         = Path(os.getenv("FEAT_MODE"))   # "none"|"ri"|"v"|"rvi" (must match training)
 
 # --- Prototype learning (quality-first defaults) ---
 MAX_PASSES        = 3
@@ -82,9 +82,15 @@ TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer d
 
 # --- Feature augmentation (better separation) ---
 FEATURE_CFG = {
-    "use_range":  True,  "range_scale": 100.0,
-    "use_height": True,  "height_scale": 3.0,
-    "use_speed":  False,  "speed_scale": 60.0,
+    "use_range":  False,  "range_scale": 120.0,
+    "use_height": False,  "height_scale": 3.0,
+    "use_speed":  True,   "speed_scale": 25.0,
+    # dead-zone parameters for speed (tune if needed)
+    "speed_deadzone_per_m": 0.03,   # m/s per meter
+    "speed_deadzone_min":   0.15,   # m/s
+    "speed_deadzone_max":   1.20,   # m/s
+    # optional: keep False at first; turn on after you export vel_signed
+    "use_speed_signed":     False,
 }
 
 # --- DataLoader I/O knobs ---
@@ -240,6 +246,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         "dist_edges": DIST_EDGES,
         "dist_ratios": ALIGNED_DIST_RATIOS,
         "inference limit": INFERENCE_LIMIT,
+        "ckpt_path": str(CKPT_PATH) if CKPT_PATH else None,
     })
     print(f"[segment_once] Saved prototypes -> {PROTOS_PATH}  ({time.time()-t0:.1f}s)")
     return mu, kappa

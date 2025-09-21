@@ -26,20 +26,21 @@ echo "[INFO] Dataset copied."
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_street_01_Day
-export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_street_01_Day
-export PIPELINE_MODE="inference"
-
 export PREPROCESS_FOLDERS="street_01_Day"
+export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
+export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_$PREPROCESS_FOLDERS_$FEAT_MODE
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_$PREPROCESS_FOLDERS_$FEAT_MODE
+export PIPELINE_MODE="inference"
 
 mkdir -p $TRAIN_CHECKPOINTS
 mkdir -p $INFERENCE_OUTPUT_DIR
-cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+cp --verbose $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_$FEAT_MODE/checkpoints/best_model.pth $TRAIN_CHECKPOINTS/
+export TRAIN_CHECKPOINT_PTH=$TRAIN_CHECKPOINTS/best_model.pth
 
 python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/
-cp -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_rvi/
+cp -r $INFERENCE_OUTPUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_$FEAT_MODE/
+cp -r $SEGMENTATION_OUT_DIR/ $HERCULES_PROCESSED/11092025_1205_segcamel_train_output_epoch_50_$FEAT_MODE/
 
 echo "[INFO] Job completed successfully."

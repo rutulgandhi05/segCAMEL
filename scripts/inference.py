@@ -423,7 +423,13 @@ def run_inference(
         # derive per-point speed from RAW (CPU) features if available
         # assumes raw feat columns are [reflectivity, velocity, intensity]
         has_vel = (feat_cpu.ndim == 2) and (feat_cpu.shape[1] >= 2)
-        speed_all = feat_cpu[:, 1].abs().clone() if has_vel else torch.empty((0,), dtype=torch.float32)
+        
+        if has_vel:
+            vel_signed_all = feat_cpu[:, 1].clone()          # signed radial v (m/s)
+            speed_all      = vel_signed_all.abs()            # |v|
+        else:
+            vel_signed_all = torch.empty((0,), dtype=torch.float32)
+            speed_all      = torch.empty((0,), dtype=torch.float32)
 
         B = len(lidar_stems)
         for b in range(B):
@@ -455,7 +461,8 @@ def run_inference(
                     "mask": batch["mask"].index_select(0, idx_b_cpu).cpu() if batch["mask"].numel() else torch.empty((0,), dtype=torch.bool),
                     "grid_size": torch.tensor(grid_size_val),
                     "image_stem": img_stem,
-                    "speed": speed_all.index_select(0, idx_b_cpu) if has_vel else torch.empty((0,), dtype=torch.float32),
+                    "speed": speed_all.index_select(0, idx_b_cpu),
+                    "vel_signed": vel_signed_all.index_select(0, idx_b_cpu)
                 }
 
                 save_path = _unique_save_path(out_dir, img_stem, lid_stem)

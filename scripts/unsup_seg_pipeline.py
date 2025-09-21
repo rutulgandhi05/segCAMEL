@@ -145,9 +145,29 @@ def _build_features(item: Dict[str, torch.Tensor], feature_cfg: Optional[Dict] =
     if feature_cfg.get("use_speed", False):
         s = item.get("speed", None)
         if s is not None and s.numel() == X.shape[0]:
-            s = (s / float(feature_cfg.get("speed_scale", 30.0))).unsqueeze(1).to(torch.float32)
-            comps.append(s)
+            # --- range-aware dead-zone: tau(r) = clip(a*r, t_min, t_max) ---
+            a     = float(feature_cfg.get("speed_deadzone_per_m", 0.02))  # m/s per meter
+            t_min = float(feature_cfg.get("speed_deadzone_min", 0.10))    # m/s
+            t_max = float(feature_cfg.get("speed_deadzone_max", 0.80))    # m/s
+            r     = torch.linalg.norm(item["coord_raw"], dim=1)
+            tau   = torch.clamp(a * r, min=t_min, max=t_max)
+            s_filt = torch.where(s.abs() < tau, torch.zeros_like(s), s)
+            s_scaled = (s_filt / float(feature_cfg.get("speed_scale", 25.0))).unsqueeze(1).to(torch.float32)
+            comps.append(s_scaled)
 
+    # optional: signed, two-channel variant (direction only when confident)
+    if feature_cfg.get("use_speed_signed", False) and ("vel_signed" in item):
+        v = item["vel_signed"]
+        a     = float(feature_cfg.get("speed_deadzone_per_m", 0.02))
+        t_min = float(feature_cfg.get("speed_deadzone_min", 0.10))
+        t_max = float(feature_cfg.get("speed_deadzone_max", 0.80))
+        r     = torch.linalg.norm(item["coord_raw"], dim=1)
+        tau   = torch.clamp(a * r, min=t_min, max=t_max)
+        v_pos = torch.where(v >  tau,  v, torch.zeros_like(v))
+        v_neg = torch.where(v < -tau, -v, torch.zeros_like(v))
+        comps.append((v_pos / float(feature_cfg.get("speed_scale", 25.0))).unsqueeze(1).to(torch.float32))
+        comps.append((v_neg / float(feature_cfg.get("speed_scale", 25.0))).unsqueeze(1).to(torch.float32))
+        
     return X if len(comps) == 1 else torch.cat(comps, dim=1)
 
 # ------------------------------------------------------------------------ #
