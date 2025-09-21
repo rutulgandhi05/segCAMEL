@@ -33,7 +33,7 @@ INFERENCE_BATCH   = 4
 INFERENCE_WORKERS = 12
 INFERENCE_LIMIT   = 5000   # set to an integer for quick testing (e.g. 10); None → all
 VOXEL_SIZE        = 0.10
-FEAT_MODE         = Path(os.getenv("FEAT_MODE"))   # "none"|"ri"|"v"|"rvi" (must match training)
+FEAT_MODE         = os.getenv("FEAT_MODE")  # "none"|"ri"|"v"|"rvi" (must match training)
 
 # --- Prototype learning (quality-first defaults) ---
 MAX_PASSES        = 3
