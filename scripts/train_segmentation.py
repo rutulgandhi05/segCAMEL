@@ -691,7 +691,7 @@ if __name__ == "__main__":
         data_dir=DATA_DIR,
         output_dir=TRAIN_CHECKPOINTS,
         epochs=50,
-        workers=16,
+        workers=None,
         batch_size=4,
         accum_steps=8,
         prefetch_factor=2,
