@@ -19,7 +19,7 @@ export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
 
-export PREPROCESS_FOLDERS="street_01_Day"
+export PREPROCESS_FOLDERS="river_island_01_Day"
 echo "[INFO] Copying $PREPROCESS_FOLDERS to $TMP_HERCULES_DATASET"
 cp -r  $HERCULES_DATASET/$PREPROCESS_FOLDERS $TMP_HERCULES_DATASET/
 ls $TMP_HERCULES_DATASET
@@ -29,8 +29,8 @@ export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
-export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_street_01_Day_$FEAT_MODE
-export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_street_01_Day_$FEAT_MODE
+export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_river_island_01_Day_$FEAT_MODE
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_river_island_01_Day_$FEAT_MODE
 export PIPELINE_MODE="inference"
 
 mkdir -p $TRAIN_CHECKPOINTS

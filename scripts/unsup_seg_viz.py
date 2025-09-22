@@ -279,7 +279,7 @@ def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_pat
     pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
     pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
     vis.add_geometry(pcd)
-    _reset_camera(vis, pcd, zoom=0.7)
+    _reset_camera(vis, pcd, zoom=1.0)
     vis.poll_events(); vis.update_renderer()
     if png_path is not None:
         o3d.io.write_image(str(png_path), vis.capture_screen_float_buffer(do_render=True))
@@ -431,7 +431,7 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
         cols = _compute_colors(payload, cur_lab)
         pcd.colors = o3d.utility.Vector3dVector(cols.astype(np.float64))
         vis.update_geometry(pcd)
-        _reset_camera(vis, pcd, zoom=0.7)
+        _reset_camera(vis, pcd, zoom=1.0)
         vis.update_renderer(); vis.poll_events()
         vis.get_render_option().point_size = ro.point_size
         print(f"[o3d] frame {i+1}/{len(stems)}: {stem} mode={state['mode']} fade={state['fade']} align={ALIGN_TO_REF}")
@@ -440,7 +440,7 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     def prev_frame(_): state["i"] = (state["i"] - 1) % len(stems); load_frame(state["i"]); return False
     def inc_ps(_): ro.point_size = min(ro.point_size + 1.0, 10.0); vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
     def dec_ps(_): ro.point_size = max(ro.point_size - 1.0, 1.0);  vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
-    def reset_v(_): _reset_camera(vis, pcd, zoom=0.7); return False
+    def reset_v(_): _reset_camera(vis, pcd, zoom=1.0); return False
     def toggle_mode(_):
         state["mode"] = "range" if state["mode"] == "labels" else "labels"
         _dbg(f"[viewer] Toggle mode -> {state['mode']}")
