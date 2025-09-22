@@ -84,7 +84,7 @@ TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer d
 FEATURE_CFG = {
     "use_range":  False,  "range_scale": 120.0,
     "use_height": False,  "height_scale": 3.0,
-    "use_speed":  False,   "speed_scale": 25.0,
+    "use_speed":  True,   "speed_scale": 25.0,
     # dead-zone parameters for speed (tune if needed)
     "speed_deadzone_per_m": 0.03,   # m/s per meter
     "speed_deadzone_min":   0.15,   # m/s
@@ -94,9 +94,9 @@ FEATURE_CFG = {
 }
 
 # --- DataLoader I/O knobs ---
-DL_WORKERS    = 8
-DL_PREFETCH   = 4
-DL_BATCH_IO   = 32
+DL_WORKERS    = 4
+DL_PREFETCH   = 2
+DL_BATCH_IO   = 16
 DL_PIN_MEMORY = True
 
 # Robust import (package vs flat)
@@ -326,14 +326,24 @@ def _compute_metrics(accum):
         print("[segment_once] Metrics disabled (collect_metrics=False); skipping CSV.")
         return
     print("[segment_once] Computing metrics CSV…")
-    evaluate_accumulated_metrics(
+    """ evaluate_accumulated_metrics(
         accum,
         out_csv=METRICS_CSV,
-        sample_n=50_000,
+        sample_n=200_000,
         seed=SEED,
         q_bins=4,
         tau_list=[0.2, 0.4, 0.6],
         tau_policy="quantile",
+    )
+ """
+    evaluate_accumulated_metrics(
+        accum,
+        out_csv=METRICS_CSV,
+        sample_n=200_000,
+        distance="cosine",
+        speed_tau_policy="value",
+        speed_tau_list=(0.3, 0.5, 1.0),
+        labels2d_all=None     # or pass your collected 2D labels if you have them
     )
     print(f"[segment_once] Wrote -> {METRICS_CSV}")
 

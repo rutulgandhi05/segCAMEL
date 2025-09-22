@@ -208,6 +208,118 @@ def distillation_loss(pred_feat, target_feat, eps=1e-6):
     return 1 - (pred * target).sum(dim=1).mean()
 
 
+@torch.no_grad()
+def evaluate_distill_loss(
+    model,
+    proj_head,
+    val_dir: Path,
+    device: torch.device,
+    *,
+    workers: int = 8,
+    batch_size: int = 8,
+    voxel_size: float = 0.10,
+    feat_mode: str = "rvi",
+    prefetch_factor: int = 2,
+) -> float:
+    """
+    Computes mean cosine distillation loss on a held-out directory written by preprocess.py.
+    Uses the same visible-first voxelisation + normalisation as training for apples-to-apples evaluation.
+    """
+    model_was_training = model.training
+    model.eval()
+    if isinstance(proj_head, torch.nn.Module):
+        proj_was_training = proj_head.training
+        proj_head.eval()
+
+    dataset = TrainVoxDataset(Path(val_dir), fallback_voxel_size=voxel_size)
+    if len(dataset) == 0:
+        print(f"[VAL] No samples under {val_dir}; returning NaN.")
+        return float("nan")
+
+    dl = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=max(1, int(workers)),
+        pin_memory=True,
+        persistent_workers=False,
+        prefetch_factor=prefetch_factor,
+        collate_fn=collate_trainvox,
+        multiprocessing_context="spawn",
+    )
+
+    # Feature cols to keep (mirror training)
+    probe = dataset[0]
+    feat_dim_total = probe["feat"].shape[1]
+    col_map = {"r": 0, "v": 1, "i": 2}
+    keep_cols = [] if feat_mode == "none" else [
+        col_map[c] for c in feat_mode if c in col_map and col_map[c] < feat_dim_total
+    ]
+
+    total, count = 0.0, 0
+    for batch in tqdm(dl, desc="Val distill loss", leave=False):
+        if batch["coord"].numel() == 0:
+            continue
+
+        # visibility mask (match train fallback logic)
+        mask_cpu = batch["mask"].bool()
+        idx_cpu = mask_cpu.nonzero(as_tuple=False).squeeze(1)
+        if idx_cpu.numel() == 0:
+            idx_cpu = torch.arange(batch["coord"].shape[0], dtype=torch.long)
+
+        # to device + normalise exactly like training
+        coord = batch["coord"].to(device, non_blocking=True).float()
+        feat  = batch["feat"].to(device, non_blocking=True).float()
+        grid_coord = batch["grid_coord"].to(device, non_blocking=True)
+        batch_tensor = batch["batch"].to(device, non_blocking=True)
+        offset = batch["offset"].to(device, non_blocking=True)
+        grid_size_val = float(batch["grid_size"].mean().item())
+
+        if keep_cols:
+            feat_sel = feat[:, keep_cols]
+            feat_sel = (feat_sel - feat_sel.mean(dim=0)) / (feat_sel.std(dim=0) + 1e-6)
+        else:
+            feat_sel = torch.empty(feat.shape[0], 0, device=feat.device, dtype=feat.dtype)
+
+        coord = (coord - coord.mean(dim=0)) / (coord.std(dim=0) + 1e-6)
+        input_feat = torch.cat([coord, feat_sel], dim=1)
+
+        data_dict = {
+            "coord": coord,
+            "feat": input_feat,
+            "grid_coord": grid_coord,
+            "grid_size": grid_size_val,
+            "offset": offset,
+            "batch": batch_tensor,
+        }
+
+        out = model(data_dict)
+        feats64 = torch.nan_to_num(out.feat, nan=0.0, posinf=1e4, neginf=-1e4).clamp_(-20, 20)
+        pred_proj = torch.nn.functional.linear(feats64.float(), weight=proj_head.weight, bias=proj_head.bias)
+        pred_proj = torch.nan_to_num(pred_proj, nan=0.0, posinf=1e4, neginf=-1e4)
+
+        idx = idx_cpu.to(device, non_blocking=True)
+        if idx.numel() == 0:
+            continue
+        dino_valid = batch["dino_feat"].index_select(0, idx_cpu).to(device, non_blocking=True).float()
+        dino_valid = torch.nan_to_num(dino_valid, nan=0.0, posinf=1e4, neginf=-1e4)
+        pred_valid = pred_proj.index_select(0, idx)
+
+        loss = distillation_loss(pred_valid, dino_valid)
+        total += float(loss.item())
+        count += 1
+
+        # free ASAP
+        del coord, feat, grid_coord, batch_tensor, offset, feat_sel, input_feat
+        del out, feats64, pred_proj, pred_valid, dino_valid, idx, idx_cpu, mask_cpu
+
+    # restore modes
+    if model_was_training: model.train()
+    if isinstance(proj_head, torch.nn.Module) and proj_was_training: proj_head.train()
+
+    return total / max(count, 1)
+
+
 def _load_state(m, state):
     """Load a state_dict regardless of DataParallel wrapping differences."""
     try:
@@ -238,6 +350,8 @@ def train(
     use_data_parallel=True,
     feat_mode: str = "rvi",
     voxel_size: float = 0.10,
+    val_dir = None,
+    val_every= 1,
 ):
     # ---- Repro ----
     torch.use_deterministic_algorithms(False)
@@ -513,6 +627,24 @@ def train(
         avg_loss = total_loss_raw / denom_batches
         print(f"Avg Loss (per batch) = {avg_loss:.6f} | Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
 
+        val_loss = None
+        if (val_dir is not None) and ((epoch + 1) % max(1, val_every) == 0):
+            try:
+                val_loss = evaluate_distill_loss(
+                    model if not isinstance(model, torch.nn.DataParallel) else model.module,
+                    proj_head if not isinstance(proj_head, torch.nn.DataParallel) else proj_head.module,
+                    val_dir=Path(val_dir),
+                    device=device,
+                    workers=workers,
+                    batch_size=max(4, batch_size // 2),
+                    voxel_size=voxel_size,
+                    feat_mode=feat_mode,
+                    prefetch_factor=prefetch_factor,
+                )
+                print(f"[VAL] Mean distillation loss on held-out = {val_loss:.6f}")
+            except Exception as e:
+                print(f"[VAL] Skipping validation due to error: {e}")
+
         # ---- Save latest and best checkpoints ----
         model_state = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
         head_state = proj_head.module.state_dict() if isinstance(proj_head, torch.nn.DataParallel) else proj_head.state_dict()
@@ -532,10 +664,17 @@ def train(
         torch.save(state, latest_ckpt_path)
         print(f"Saved: {latest_ckpt_epoch.name} and latest_checkpoint.pth")
 
-        if avg_loss < best_loss:
+        """ if avg_loss < best_loss:
             best_loss = avg_loss
             torch.save(state, best_ckpt_path)
-            print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})")
+            print(f"Best model saved to {best_ckpt_path} (loss = {avg_loss:.6f})") """
+        
+        score = val_loss if (val_loss is not None and not math.isnan(val_loss)) else avg_loss
+        if score < best_loss:
+            best_loss = score
+            torch.save(state, best_ckpt_path)
+            print(f"Best model saved to {best_ckpt_path} "
+                  f"({'val' if val_loss is not None else 'train'} loss = {score:.6f})")
 
         print(f"[Epoch {epoch+1}] Skipped {skipped_batches} batches due to errors.")
         if device.type == "cuda":
@@ -548,6 +687,7 @@ if __name__ == "__main__":
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
     FEAT_MODE = os.getenv("FEAT_MODE", "rvi")  # "rvi", "rv", "none", etc.
     RESULT_DIR = Path(os.getenv("RESULT_DIR"))
+    VAL_DIR = Path(os.getenv("VAL_DIR", ""))
 
     train(
         data_dir=DATA_DIR,
@@ -561,6 +701,8 @@ if __name__ == "__main__":
         use_data_parallel=False,
         feat_mode=FEAT_MODE,
         voxel_size=0.10,
+        val_dir=VAL_DIR,
+        val_every=1,
     )
 
     print(f"[INFO] Training finished. Checkpoints are in {TRAIN_CHECKPOINTS}")
@@ -579,5 +721,6 @@ if __name__ == "__main__":
         f.write(f"BATCH_SIZE={4}\n")
         f.write(f"PREFETCH_FACTOR={2}\n")
         f.write(f"GRADIENT_ACCUMULATION_STEPS={8}\n")
+        f.write(f"VAL_DIR={VAL_DIR}\n")
 
     print("[INFO] Done.")

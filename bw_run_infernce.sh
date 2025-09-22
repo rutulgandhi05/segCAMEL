@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #SBATCH -J Inference
-#SBATCH -o logs/inference_output_ri.txt
-#SBATCH -e logs/inference_error_ri.txt
+#SBATCH -o logs/inference_output_rvi.txt
+#SBATCH -e logs/inference_error_rvi.txt
 #SBATCH -c 32
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 30:00:00
 #SBATCH -p gpu_a100_il
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mail-type ALL
 #SBATCH --mail-user rutul.gandhi@uni-ulm.de
 
@@ -26,10 +26,10 @@ echo "[INFO] Dataset copied."
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export PREPROCESS_FOLDERS="street_01_Day"
-export FEAT_MODE="ri"  # "rvi", "rv", "none", etc.
-export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_$PREPROCESS_FOLDERS_$FEAT_MODE
-export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_$PREPROCESS_FOLDERS_$FEAT_MODE
+export PREPROCESS_FOLDERS="stream_01_Day"
+export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
+export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_stream_01_Day_$FEAT_MODE
+export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_stream_01_Day_$FEAT_MODE
 export PIPELINE_MODE="inference"
 
 mkdir -p $TRAIN_CHECKPOINTS

@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH -J Pipeline
-#SBATCH -o pipeline_output.txt
-#SBATCH -e pipeline_error.txt
+#SBATCH -o logs/pipeline_output_rvi.txt
+#SBATCH -e logs/pipeline_error_rvi.txt
 #SBATCH -c 32
 #SBATCH -N 1
 #SBATCH -n 1
@@ -25,7 +25,8 @@ echo "[INFO] Dataset copied."
 
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export PREPROCESS_FOLDERS="mountain_01_Day,library_01_Day,sports_complex_01_Day,stream_01_Day"
+export PREPROCESS_FOLDERS="mountain_01_Day,library_01_Day,sports_complex_01_Day,river_island_01_Day"
+export VAL_DIR=$TMPDIR/segcamel/stream_01_Day
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output_epoch_50_$FEAT_MODE

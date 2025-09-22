@@ -778,7 +778,7 @@ def segment_dataset(
 #                              Metrics wrapper                             #
 # ------------------------------------------------------------------------ #
 
-def evaluate_accumulated_metrics(
+""" def evaluate_accumulated_metrics(
     accum: Dict[str, List[torch.Tensor]],
     out_csv: Path,
     *,
@@ -810,4 +810,397 @@ def evaluate_accumulated_metrics(
         for k, v in results.items():
             w.write(f"{k},{'' if v is None else v}\n")
     print(f"[metrics] wrote {out_csv}")
-    return results
+    return results """
+
+# --- REPLACE the whole evaluate_accumulated_metrics with this version ---
+def evaluate_accumulated_metrics(
+    accum,
+    out_csv,
+    sample_n=200_000,
+    distance="cosine",
+    # --- NEW: motion & temporal knobs ---
+    speed_tau_policy="value",           # "value" for fixed m/s thresholds
+    speed_tau_list=(0.3, 0.5, 1.0),     # thresholds for F1 and bins (m/s); tune per your dataset
+    # --- NEW: optional 2D alignment (pass an extra list at call-site, else leave None) ---
+    labels2d_all=None
+):
+    """
+    Streaming / two-pass metrics with motion & temporal extensions.
+    - Exact CH/DBI on full data (z-scored, streaming).
+    - Silhouette on a reservoir sample (keeps memory bounded).
+    - Motion metrics: NMI(cluster, speed-bins), F1_dyn@taus, weighted within-cluster |v| variance.
+    - Temporal consistency: size-weighted cosine similarity of matched cluster centroids across consecutive frames.
+    - 2D alignment NMI: optional, if labels2d_all is provided (same shape lists as labels_all).
+    """
+    import math, gc, csv, os
+    import numpy as np
+
+    try:
+        from sklearn.metrics import silhouette_score
+    except Exception:
+        silhouette_score = None
+
+    feats_all = accum["feats"]
+    labels_all = accum["labels"]
+    speeds_all = accum["speeds"]
+    vis_all = accum["mask"]
+
+    # ---------- helpers ----------
+    def _iter_chunks(include_2d=False):
+        """Yield per-frame (X, y, m, v, y2d_optional). Filter on visibility & assigned labels later."""
+        if include_2d and labels2d_all is not None:
+            for Xi, yi, mi, vi, zi in zip(feats_all, labels_all, vis_all, speeds_all, labels2d_all):
+                yield Xi.detach().cpu().float(), yi.detach().cpu().long(), mi.detach().cpu().bool(), \
+                      (vi.detach().cpu().float() if vi is not None and vi.numel() else None), \
+                      (zi.detach().cpu().long() if zi is not None and zi.numel() else None)
+        else:
+            for Xi, yi, mi, vi in zip(feats_all, labels_all, vis_all, speeds_all):
+                yield Xi.detach().cpu().float(), yi.detach().cpu().long(), mi.detach().cpu().bool(), \
+                      (vi.detach().cpu().float() if vi is not None and vi.numel() else None), None
+
+    def _write_csv_row(path, row: dict):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_header = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+
+
+    # ---------- discover K, N ----------
+    K = 0
+    N_total = 0
+    for Xi, yi, mi, vi, zi in _iter_chunks(include_2d=True):
+        keep = mi & (yi >= 0)
+        if keep.any():
+            yk = yi[keep]
+            K = max(K, int(yk.max().item()) + 1)
+            N_total += int(yk.numel())
+        del Xi, yi, mi, vi, zi, keep
+        gc.collect()
+    if K == 0 or N_total == 0:
+        _write_csv_row(out_csv, {"N": 0, "K": 0, "CH": float("nan"), "DBI": float("nan"), "SIL": float("nan")})
+        return
+
+    # ---------- pass 1: global z-stats + reservoir + motion tallies + per-frame centroids ----------
+    # Global z-stats
+    sum_global = None
+    sumsq_global = None
+    n_seen = 0
+
+    # Reservoir for silhouette
+    cap = int(sample_n) if sample_n else 0
+    samp_X = samp_y = None
+    rng = np.random.RandomState(0)
+
+    # Motion: bin edges & holders
+    taus = np.array(speed_tau_list, dtype=np.float32)  # fixed thresholds (m/s)
+    B = len(taus) + 1                                  # bins: <=t1, (t1,t2], ... , >t_last
+    CM = np.zeros((K, B), dtype=np.int64)              # confusion: cluster x speed_bin
+    # F1 per threshold: per-cluster pos/neg counts
+    pos_counts = np.zeros((K, len(taus)), dtype=np.int64)
+    neg_counts = np.zeros((K, len(taus)), dtype=np.int64)
+    # Within-cluster |v| variance (Welford): per-cluster mean & M2
+    vel_mean = np.zeros(K, dtype=np.float64)
+    vel_M2   = np.zeros(K, dtype=np.float64)
+    vel_n    = np.zeros(K, dtype=np.int64)
+
+    # Temporal: per-frame centroids & sizes (for cosine matching)
+    frame_centroids = []   # list of (K,64) np.float32
+    frame_sizes     = []   # list of (K,) np.int64
+
+    for Xi, yi, mi, vi, zi in _iter_chunks(include_2d=True):
+        keep = mi & (yi >= 0)
+        if not keep.any():
+            # still append empty centroids for temporal indexing
+            frame_centroids.append(np.zeros((K, 64), dtype=np.float32))
+            frame_sizes.append(np.zeros(K, dtype=np.int64))
+            del Xi, yi, mi, vi, zi, keep
+            gc.collect()
+            continue
+
+        X = Xi[keep].numpy()
+        y = yi[keep].numpy()
+        n = X.shape[0]
+
+        # init global stats
+        if sum_global is None:
+            D = X.shape[1]
+            sum_global  = np.zeros(D, dtype=np.float64)
+            sumsq_global = np.zeros(D, dtype=np.float64)
+
+        sum_global  += X.sum(0, dtype=np.float64)
+        sumsq_global += (X * X).sum(0, dtype=np.float64)
+
+        # reservoir sample for silhouette
+        if cap > 0:
+            if samp_X is None:
+                take = min(cap, n)
+                idx = np.arange(take)
+                samp_X = X[idx].copy()
+                samp_y = y[idx].copy()
+            else:
+                for i in range(n):
+                    j = rng.randint(0, n_seen + i + 1)
+                    if j < cap:
+                        samp_X[j] = X[i]
+                        samp_y[j] = y[i]
+
+        # motion tallies
+        if vi is not None and vi.numel():
+            sp = vi[keep].numpy()  # |v| in m/s
+            # bins: np.digitize returns 1..len(taus); we want 0..B-1
+            bin_ids = np.digitize(sp, taus, right=True)
+            # Confusion counts per cluster x bin
+            for k in range(K):
+                mk = (y == k)
+                if np.any(mk):
+                    hist = np.bincount(bin_ids[mk], minlength=B)
+                    CM[k, :] += hist.astype(np.int64)
+
+            # F1 per threshold: pos/neg per cluster
+            for t_idx, t in enumerate(taus):
+                pos = (sp > t)
+                for k in range(K):
+                    mk = (y == k)
+                    if np.any(mk):
+                        pos_counts[k, t_idx] += int(np.count_nonzero(pos[mk]))
+                        neg_counts[k, t_idx] += int(np.count_nonzero(~pos[mk]))
+
+            # Within-cluster |v| variance (Welford)
+            for k in range(K):
+                mk = (y == k)
+                if np.any(mk):
+                    vk = sp[mk].astype(np.float64)
+                    nk_old = vel_n[k]
+                    vel_n[k] += vk.size
+                    delta = vk.mean() - vel_mean[k] if vk.size > 0 else 0.0
+                    vel_mean[k] += (vk.size * delta) / max(vel_n[k], 1)
+                    # M2 update per sample for accuracy
+                    for vv in vk:
+                        d  = vv - vel_mean[k]
+                        vel_M2[k] += d * d
+
+        # Per-frame centroids in raw feature space (for temporal)
+        # We use L2-normalized features for cosine later
+        C_t = np.zeros((K, X.shape[1]), dtype=np.float32)
+        S_t = np.zeros(K, dtype=np.int64)
+        for k in range(K):
+            mk = (y == k)
+            if np.any(mk):
+                Xk = X[mk]
+                C_t[k] = Xk.mean(0).astype(np.float32)
+                S_t[k] = Xk.shape[0]
+        frame_centroids.append(C_t)
+        frame_sizes.append(S_t)
+
+        n_seen += n
+        del Xi, yi, mi, vi, zi, keep, X, y
+        gc.collect()
+
+    # global z-scoring params
+    mu = sum_global / float(n_seen)
+    var = np.maximum(sumsq_global / float(n_seen) - mu * mu, 1e-8)
+    std = np.sqrt(var, dtype=np.float64)
+
+    # ---------- pass 2: CH/DBI in z-space (exact, full dataset) ----------
+    mu_k_sum = np.zeros((K, mu.shape[0]), dtype=np.float64)
+    sumsq_k  = np.zeros(K, dtype=np.float64)
+    n_k      = np.zeros(K, dtype=np.int64)
+    sum_global_z = np.zeros_like(mu, dtype=np.float64)
+
+    for Xi, yi, mi, vi, zi in _iter_chunks(include_2d=False):
+        keep = mi & (yi >= 0)
+        if not keep.any():
+            del Xi, yi, mi, vi
+            gc.collect();  continue
+        Xz = (Xi[keep].numpy() - mu) / std
+        y  = yi[keep].numpy()
+        for k in range(K):
+            mk = (y == k)
+            if np.any(mk):
+                Xk = Xz[mk]
+                n_k[k]     += Xk.shape[0]
+                mu_k_sum[k] += Xk.sum(0, dtype=np.float64)
+                sumsq_k[k]  += float((Xk * Xk).sum())
+        sum_global_z += Xz.sum(0, dtype=np.float64)
+        del Xi, yi, mi, vi, Xz, y
+        gc.collect()
+
+    mu_k = (mu_k_sum.T / np.maximum(n_k, 1)).T
+    mu_k_norm2 = (mu_k * mu_k).sum(1)
+    SW = float(np.sum(sumsq_k - n_k * mu_k_norm2))
+    mu_g = sum_global_z / float(n_seen)
+    SB = float(np.sum(n_k * np.sum((mu_k - mu_g) ** 2, axis=1)))
+    CH = (SB / max(K - 1, 1)) / (SW / max(n_seen - K, 1))
+
+    # DBI (Euclidean on z-scored space)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s_k = np.sqrt(np.maximum((sumsq_k - n_k * mu_k_norm2) / np.maximum(n_k, 1), 0.0))
+    cij = mu_k @ mu_k.T
+    Md2 = np.maximum(mu_k_norm2[:, None] + mu_k_norm2[None, :] - 2.0 * cij, 1e-12)
+    Md  = np.sqrt(Md2)
+    R = np.full(K, 0.0)
+    for k in range(K):
+        if n_k[k] == 0:
+            R[k] = np.nan
+            continue
+        ratios = (s_k[k] + s_k) / np.maximum(Md[k], 1e-8)
+        ratios[k] = -np.inf
+        R[k] = float(np.nanmax(ratios))
+    DBI = float(np.nanmean(R))
+
+    # ---------- Silhouette (sampled) ----------
+    SIL = float("nan")
+    if (samp_X is not None) and (silhouette_score is not None):
+        if distance == "cosine":
+            SIL = float(silhouette_score(samp_X, samp_y, metric="cosine"))
+        else:
+            samp_Xz = (samp_X - mu) / std
+            SIL = float(silhouette_score(samp_Xz, samp_y, metric="euclidean"))
+
+    # ---------- Motion metrics ----------
+    # 4) NMI(cluster, speed-bins)
+    def _entropy(p):
+        p = p[p > 0]
+        return -float(np.sum(p * np.log(p)))
+    total = CM.sum()
+    nmi = float("nan")
+    if total > 0:
+        Pxy = CM / total
+        Px  = Pxy.sum(1, keepdims=True)
+        Py  = Pxy.sum(0, keepdims=True)
+        MI  = float(np.nansum(Pxy * (np.log(Pxy + 1e-12) - np.log(Px + 1e-12) - np.log(Py + 1e-12))))
+        Hx  = _entropy((CM.sum(1) / total))
+        Hy  = _entropy((CM.sum(0) / total))
+        nmi = MI / max((Hx + Hy) / 2.0, 1e-12)
+
+    # 5) F1 for dynamic vs static at thresholds
+    f1s = {}
+    for t_idx, t in enumerate(taus):
+        # cluster majority mapping to predicted label at this threshold
+        # if majority is "moving" (pos >= neg) then cluster predicts moving for all its points
+        pos_k = pos_counts[:, t_idx]
+        neg_k = neg_counts[:, t_idx]
+        # global counts by majority decision
+        TP = int((pos_k[pos_k >= neg_k]).sum())
+        FP = int((neg_k[pos_k >= neg_k]).sum())
+        TN = int((neg_k[pos_k <  neg_k]).sum())
+        FN = int((pos_k[pos_k <  neg_k]).sum())
+        precision = TP / max(TP + FP, 1)
+        recall    = TP / max(TP + FN, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+        f1s[f"F1_dyn@{float(t):.2f}mps"] = float(f1)
+
+    # 6) Weighted within-cluster speed variance
+    vel_var_k = np.zeros(K, dtype=np.float64)
+    for k in range(K):
+        if vel_n[k] > 1:
+            vel_var_k[k] = vel_M2[k] / (vel_n[k] - 1)
+        else:
+            vel_var_k[k] = np.nan
+    # size-weighted mean of per-cluster variance (ignore NaNs)
+    weights = n_k.astype(np.float64)
+    mask = ~np.isnan(vel_var_k)
+    velvar_wmean = float(np.sum(weights[mask] * vel_var_k[mask]) / max(np.sum(weights[mask]), 1.0))
+
+    # ---------- Temporal consistency (feature centroid matching) ----------
+    # cosine similarity between matched centroids in consecutive frames, size-weighted
+    def _l2norm(a, axis=1, eps=1e-12):
+        n = np.sqrt(np.maximum((a * a).sum(axis=axis, keepdims=True), eps))
+        return a / n
+    temp_scores = []
+    for t in range(len(frame_centroids) - 1):
+        C0 = _l2norm(frame_centroids[t].astype(np.float64), axis=1)
+        C1 = _l2norm(frame_centroids[t + 1].astype(np.float64), axis=1)
+        S0 = frame_sizes[t].astype(np.float64)
+        S1 = frame_sizes[t + 1].astype(np.float64)
+        # cosine sim matrix
+        S = C0 @ C1.T  # (K,K)
+        # greedy matching (Hungarian would be nicer but this is light and stable)
+        used0 = np.zeros(K, dtype=bool)
+        used1 = np.zeros(K, dtype=bool)
+        pairs = []
+        # pick top-K pairs greedily
+        for _ in range(K):
+            idx = np.unravel_index(np.argmax(S, axis=None), S.shape)
+            i, j = int(idx[0]), int(idx[1])
+            if used0[i] or used1[j]:
+                S[i, j] = -np.inf
+                continue
+            pairs.append((i, j, S[i, j]))
+            used0[i] = True
+            used1[j] = True
+            S[i, :] = -np.inf
+            S[:, j] = -np.inf
+        # size-weighted mean cosine over pairs (min size to be conservative)
+        num = 0.0
+        den = 0.0
+        for i, j, sim in pairs:
+            w = min(S0[i], S1[j])
+            num += w * max(float(sim), -1.0)
+            den += w
+        if den > 0:
+            temp_scores.append(num / den)
+
+    temporal_consistency = float(np.mean(temp_scores)) if len(temp_scores) else float("nan")
+
+    # ---------- Optional: 2D alignment NMI ----------
+    nmi_2d = float("nan")
+    if labels2d_all is not None:
+        # stream a cross-tab between 3D cluster ids and 2D token/segment ids
+        # We don't know the max 2D id; build a dict of counters
+        from collections import defaultdict
+        counts_2d = defaultdict(lambda: defaultdict(int))  # k -> { z2d -> count }
+        n2d_total = 0
+        for Xi, yi, mi, vi, zi in _iter_chunks(include_2d=True):
+            keep = mi & (yi >= 0) & (zi is not None)
+            if not keep.any():
+                del Xi, yi, mi, vi, zi, keep; gc.collect();  continue
+            yk = yi[keep].numpy()
+            zk = zi[keep].numpy()
+            for k in range(K):
+                mk = (yk == k)
+                if np.any(mk):
+                    unique, cnts = np.unique(zk[mk], return_counts=True)
+                    for u, c in zip(unique.tolist(), cnts.tolist()):
+                        counts_2d[k][int(u)] += int(c)
+                    n2d_total += int(cnts.sum())
+            del Xi, yi, mi, vi, zi, keep
+            gc.collect()
+        if n2d_total > 0:
+            # build dense matrix
+            # map 2D ids to 0..Z-1
+            u2d = sorted({z for d in counts_2d.values() for z in d})
+            zmap = {z:i for i,z in enumerate(u2d)}
+            Z = len(u2d)
+            M = np.zeros((K, Z), dtype=np.int64)
+            for k, d in counts_2d.items():
+                for z, c in d.items():
+                    M[k, zmap[z]] = c
+            tot = M.sum()
+            Pxy = M / tot
+            Px = Pxy.sum(1, keepdims=True)
+            Py = Pxy.sum(0, keepdims=True)
+            MI = float(np.nansum(Pxy * (np.log(Pxy + 1e-12) - np.log(Px + 1e-12) - np.log(Py + 1e-12))))
+            def _H(p): 
+                p = p[p > 0];  return -float(np.sum(p * np.log(p)))
+            Hx = _H(M.sum(1) / tot);  Hy = _H(M.sum(0) / tot)
+            nmi_2d = MI / max((Hx + Hy) / 2.0, 1e-12)
+
+    # ---------- write CSV ----------
+    row = {
+        "N": int(n_seen), "K": int(K),
+        "CH": float(CH), "DBI": float(DBI), "SIL": float(SIL),
+        "NMI_speedbins": float(nmi),
+        "velvar_wmean": float(velvar_wmean),
+        "temporal_consistency": temporal_consistency,
+    }
+    row.update(f1s)                # add F1_dyn@... columns
+    if not math.isnan(nmi_2d):
+        row["NMI_2Dalignment"] = float(nmi_2d)
+
+    _write_csv_row(out_csv, row)
+# --- END replacement ---
+
