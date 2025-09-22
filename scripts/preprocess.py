@@ -214,7 +214,7 @@ def preprocess_and_save_hercules(
             )
 
             if range_aware_occl:
-                print(f"[PREPROC][INFO] Using range-aware occlusion with occl_eps_per_m={occl_eps_per_m}, min={occl_eps_min}, max={occl_eps_max}")
+                #print(f"[PREPROC][INFO] Using range-aware occlusion with occl_eps_per_m={occl_eps_per_m}, min={occl_eps_min}, max={occl_eps_max}")
                 r = torch.linalg.norm(xyz.to(torch.float32), dim=1)
                 eps_vec = torch.clamp(occl_eps_per_m * r, min=occl_eps_min, max=occl_eps_max)
                 try:

@@ -686,6 +686,7 @@ if __name__ == "__main__":
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
     FEAT_MODE = os.getenv("FEAT_MODE", "rvi")  # "rvi", "rv", "none", etc.
     RESULT_DIR = Path(os.getenv("RESULT_DIR"))
+    PREPROCESS_FOLDERS = os.getenv("PREPROCESS_FOLDERS")
 
     train(
         data_dir=DATA_DIR,
@@ -717,5 +718,6 @@ if __name__ == "__main__":
         f.write(f"BATCH_SIZE={4}\n")
         f.write(f"PREFETCH_FACTOR={2}\n")
         f.write(f"GRADIENT_ACCUMULATION_STEPS={8}\n")
+        f.write(f"DATASET_FOLDERS={PREPROCESS_FOLDERS}\n")
 
     print("[INFO] Done.")
