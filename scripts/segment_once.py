@@ -37,7 +37,7 @@ FEAT_MODE         = os.getenv("FEAT_MODE")  # "none"|"ri"|"v"|"rvi" (must match 
 
 # --- Prototype learning (quality-first defaults) ---
 MAX_PASSES        = 3
-SAMPLE_PER_FRAME  = 50_000
+SAMPLE_PER_FRAME  = 200_000
 USE_FP16_MATMUL   = True
 SEED              = 42
 DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]   # 5 edges → 4 bins
