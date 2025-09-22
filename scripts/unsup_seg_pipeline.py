@@ -935,17 +935,26 @@ def evaluate_accumulated_metrics(
 
         # reservoir sample for silhouette
         if cap > 0:
+        # Lazily allocate full-size reservoir when we first see data
             if samp_X is None:
-                take = min(cap, n)
-                idx = np.arange(take)
-                samp_X = X[idx].copy()
-                samp_y = y[idx].copy()
-            else:
-                for i in range(n):
-                    j = rng.randint(0, n_seen + i + 1)
+                D = X.shape[1]
+                samp_X = np.empty((cap, D), dtype=np.float32)
+                samp_y = np.empty((cap,), dtype=np.int64)
+                filled = 0
+                seen_total = 0  # total visible points processed for reservoir
+
+            # Fill first, then replace with probability cap/seen_total
+            for i in range(n):
+                if filled < cap:
+                    samp_X[filled] = X[i]
+                    samp_y[filled] = y[i]
+                    filled += 1
+                else:
+                    j = rng.randint(0, seen_total + 1)  # uniform in [0, seen_total]
                     if j < cap:
                         samp_X[j] = X[i]
                         samp_y[j] = y[i]
+                seen_total += 1
 
         # motion tallies
         if vi is not None and vi.numel():
