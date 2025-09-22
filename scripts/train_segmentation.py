@@ -232,6 +232,7 @@ def evaluate_distill_loss(
         proj_head.eval()
 
     dataset = TrainVoxDataset(Path(val_dir), fallback_voxel_size=voxel_size)
+    dataset.files = dataset.files[(len(dataset)*80)//100:]
     if len(dataset) == 0:
         print(f"[VAL] No samples under {val_dir}; returning NaN.")
         return float("nan")
@@ -350,8 +351,6 @@ def train(
     use_data_parallel=True,
     feat_mode: str = "rvi",
     voxel_size: float = 0.10,
-    val_dir = None,
-    val_every= 1,
 ):
     # ---- Repro ----
     torch.use_deterministic_algorithms(False)
@@ -375,6 +374,7 @@ def train(
     print(f"[INFO] Training data: {data_dir}")
 
     dataset = TrainVoxDataset(data_dir, fallback_voxel_size=voxel_size)
+    dataset.files = dataset.files[:(len(dataset)*80)//100]  # Use 80% of data for training
     using_trainvox = dataset.using_trainvox
 
     if workers is None:
@@ -628,22 +628,21 @@ def train(
         print(f"Avg Loss (per batch) = {avg_loss:.6f} | Updates this epoch = {update_count} | Skipped batches = {skipped_batches}")
 
         val_loss = None
-        if (val_dir is not None) and ((epoch + 1) % max(1, val_every) == 0):
-            try:
-                val_loss = evaluate_distill_loss(
-                    model if not isinstance(model, torch.nn.DataParallel) else model.module,
-                    proj_head if not isinstance(proj_head, torch.nn.DataParallel) else proj_head.module,
-                    val_dir=Path(val_dir),
-                    device=device,
-                    workers=workers,
-                    batch_size=max(4, batch_size // 2),
-                    voxel_size=voxel_size,
-                    feat_mode=feat_mode,
-                    prefetch_factor=prefetch_factor,
-                )
-                print(f"[VAL] Mean distillation loss on held-out = {val_loss:.6f}")
-            except Exception as e:
-                print(f"[VAL] Skipping validation due to error: {e}")
+        try:
+            val_loss = evaluate_distill_loss(
+                model if not isinstance(model, torch.nn.DataParallel) else model.module,
+                proj_head if not isinstance(proj_head, torch.nn.DataParallel) else proj_head.module,
+                val_dir=Path(data_dir),
+                device=device,
+                workers=workers,
+                batch_size=max(4, batch_size // 2),
+                voxel_size=voxel_size,
+                feat_mode=feat_mode,
+                prefetch_factor=prefetch_factor,
+            )
+            print(f"[VAL] Mean distillation loss on held-out = {val_loss:.6f}")
+        except Exception as e:
+            print(f"[VAL] Skipping validation due to error: {e}")
 
         # ---- Save latest and best checkpoints ----
         model_state = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
@@ -687,7 +686,6 @@ if __name__ == "__main__":
     TRAIN_CHECKPOINTS = Path(os.getenv("TRAIN_CHECKPOINTS"))
     FEAT_MODE = os.getenv("FEAT_MODE", "rvi")  # "rvi", "rv", "none", etc.
     RESULT_DIR = Path(os.getenv("RESULT_DIR"))
-    VAL_DIR = Path(os.getenv("VAL_DIR", ""))
 
     train(
         data_dir=DATA_DIR,
@@ -701,8 +699,6 @@ if __name__ == "__main__":
         use_data_parallel=False,
         feat_mode=FEAT_MODE,
         voxel_size=0.10,
-        val_dir=VAL_DIR,
-        val_every=1,
     )
 
     print(f"[INFO] Training finished. Checkpoints are in {TRAIN_CHECKPOINTS}")
@@ -721,6 +717,5 @@ if __name__ == "__main__":
         f.write(f"BATCH_SIZE={4}\n")
         f.write(f"PREFETCH_FACTOR={2}\n")
         f.write(f"GRADIENT_ACCUMULATION_STEPS={8}\n")
-        f.write(f"VAL_DIR={VAL_DIR}\n")
 
     print("[INFO] Done.")
