@@ -378,7 +378,7 @@ if __name__ == "__main__":
     folders_env = os.getenv("PREPROCESS_FOLDERS")
     if not folders_env:
         raise EnvironmentError("PREPROCESS_FOLDERS environment variable not set.")
-    folders = [f.strip() for f in folders_env.split(",") if f.strip()]
+    folders = [f.strip() for f in folders_env.split(" ") if f.strip()]
 
     counter = 0
     for folder in folders:

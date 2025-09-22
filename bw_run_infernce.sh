@@ -18,15 +18,16 @@ module load devel/cuda/12.8
 export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
-echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"
-cp -r  $HERCULES_DATASET/* $TMP_HERCULES_DATASET/
+
+export PREPROCESS_FOLDERS="stream_01_Day"
+echo "[INFO] Copying $PREPROCESS_FOLDERS to $TMP_HERCULES_DATASET"
+cp -r  $HERCULES_DATASET/$PREPROCESS_FOLDERS $TMP_HERCULES_DATASET/
 ls $TMP_HERCULES_DATASET
 echo "[INFO] Dataset copied."
 
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export PREPROCESS_FOLDERS="stream_01_Day"
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
 export INFERENCE_OUTPUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_inference_output_stream_01_Day_$FEAT_MODE
 export SEGMENTATION_OUT_DIR=$TMPDIR/segcamel/$(date +"%d%m%Y_%H%M")_unsup_outputs_stream_01_Day_$FEAT_MODE

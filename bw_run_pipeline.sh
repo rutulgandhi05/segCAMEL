@@ -18,15 +18,22 @@ module load devel/cuda/12.8
 export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/segcamel/hercules_dataset
 mkdir -p $TMP_HERCULES_DATASET
-echo "[INFO] Copying dataset to $TMP_HERCULES_DATASET"
-cp -r $HERCULES_DATASET/* $TMP_HERCULES_DATASET/
+
+export PREPROCESS_FOLDERS="mountain_01_Day library_01_Day sports_complex_01_Day river_island_01_Day"
+for dir in $PREPROCESS_FOLDERS; do
+  echo "[INFO] Copying $dir to $TMP_HERCULES_DATASET"
+  cp -r $HERCULES_DATASET/"$dir" $TMP_HERCULES_DATASET/
+done
 ls $TMP_HERCULES_DATASET
 echo "[INFO] Dataset copied."
 
 export PREPROCESS_OUTPUT_DIR=$TMPDIR/segcamel/processed_data
 export TRAIN_CHECKPOINTS=$TMPDIR/segcamel/checkpoints
-export PREPROCESS_FOLDERS="mountain_01_Day,library_01_Day,sports_complex_01_Day,river_island_01_Day"
-export VAL_DIR= $TMP_HERCULES_DATASET/stream_01_Day
+
+cp -r $HERCULES_DATASET/stream_01_Day $TMP_HERCULES_DATASET/
+export VAL_DIR=$TMP_HERCULES_DATASET/stream_01_Day
+echo "[INFO] Validation data copied $VAL_DIR."
+
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
 export HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 export RESULT_DIR=$HERCULES_PROCESSED/$(date +"%d%m%Y_%H%M")_segcamel_train_output_epoch_50_$FEAT_MODE
