@@ -314,6 +314,7 @@ def run_inference(
         print(f"[inference] Limiting to first {limit} samples.") 
     try:
         dataset_len = len(dataset)
+        print(f"[inference] Dataset size: {dataset_len} samples.")
     except Exception:
         dataset_len = None
 

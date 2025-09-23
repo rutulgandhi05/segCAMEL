@@ -12,6 +12,7 @@ from scripts.dataloader import HerculesDataset
 from torch.utils.data import DataLoader
 from scripts.project_2d_to_3d import LidarToImageProjector
 from utils.misc import _resolve_default_workers
+from dinotool.data import TransformFactory
 
 GRID_SIZE = 0.10
 
@@ -131,7 +132,7 @@ def preprocess_and_save_hercules(
     save_dir.mkdir(parents=True, exist_ok=True)
     print(f"[PREPROC] root_dir: {root_dir}   save_dir: {save_dir}")
 
-    extractor = Extractor()
+    tf_factory = TransformFactory(model_name="dinov2_vits14_reg", patch_size=14)
 
     if workers is None:
         workers = _resolve_default_workers()
@@ -140,7 +141,7 @@ def preprocess_and_save_hercules(
 
     dataset = HerculesDataset(
         root_dir,
-        transform_factory=extractor.transform_factory,
+        transform_factory=tf_factory,
         max_workers=workers,
         use_right_image=True,
         return_all_fields=True
@@ -157,6 +158,7 @@ def preprocess_and_save_hercules(
         collate_fn=custom_collate
     )
 
+    extractor = Extractor()
     print(f"[PREPROC] {root_dir.name}: {len(dataset)} frames | workers={workers} bs={batch_size}")
     print(f"[PREPROC] DINO: {extractor.dino_model}")
 
@@ -387,7 +389,7 @@ if __name__ == "__main__":
         counter = preprocess_and_save_hercules(
             root_dir=root_dir,
             save_dir=save_dir,
-            workers=None,
+            workers=16,
             batch_size=8,
             prefetch_factor=2,
             frame_counter=counter,

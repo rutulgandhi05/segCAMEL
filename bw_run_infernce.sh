@@ -20,7 +20,7 @@ HERCULES_PROCESSED=$(ws_find hercules_preprocessed)
 TS="$(date +'%Y%m%d_%H%M')"
 
 MODEL="best_model.pth"
-TRAIN_FOLDER_STAMP="11092025_1205_segcamel_train_output_epoch_50"
+TRAIN_FOLDER_STAMP="22092025_0509_segcamel_train_output_epoch_50"
 export FEAT_MODE="rvi"  # "rvi", "rv", "none", etc.
 export PREPROCESS_FOLDERS="river_island_01_Day"
 
@@ -30,7 +30,6 @@ export PREPROCESS_OUTPUT_DIR="$TMP_ROOT/processed_data"
 export TRAIN_CHECKPOINTS="$TMP_ROOT/checkpoints"
 
 mkdir -p "$TMP_HERCULES_DATASET" "$TRAIN_CHECKPOINTS"
-
 
 echo "[INFO] Copying $PREPROCESS_FOLDERS to $TMP_HERCULES_DATASET"
 cp -r  "${HERCULES_DATASET}/${PREPROCESS_FOLDERS}" "$TMP_HERCULES_DATASET/"
