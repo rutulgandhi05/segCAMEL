@@ -3,47 +3,9 @@ import time
 import zipfile
 import torch
 import os
+import json
 from typing import Optional, Tuple
 
-# --- Core paths (env-driven, unchanged) ---
-INFER_DIR   = Path(os.environ.get("INFERENCE_OUTPUT_DIR"))        # where *_inference.pth live
-OUT_DIR     = Path(os.environ.get("SEGMENTATION_OUT_DIR"))        # root for outputs
-K           = 10                                                   # number of clusters
-ZIP_PATH    = OUT_DIR / f"labels_k{K}.zip"                        # labels go into this single zip (fresh each run)
-PROTOS_PATH = OUT_DIR / "prototypes.pt"
-RUN_CFG_JSON= OUT_DIR / "run_config.json"
-METRICS_CSV = OUT_DIR / f"metrics_k{K}.csv"
-
-# --- Execution toggles ---
-RUN_INFERENCE = True    # set True to call inference.py first
-DO_FIT        = True    # learn prototypes (False -> load from PROTOS_PATH)
-
-# --- Segmentation mode ---
-#   "kmeans": legacy cosine k-means + hard argmax (uses TAU_REJECT)
-#   "vmf"   : von Mises–Fisher mixture + soft posteriors (uses POSTERIOR_TAU / per-bin posterior map)
-MODE = "vmf"  # "kmeans" | "vmf"
-
-# --- Device ---
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# --- Inference settings (only used if RUN_INFERENCE=True) ---
-DATA_DIR          = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
-CKPT_PATH         = Path(os.getenv("TRAIN_CHECKPOINT_PTH"))
-INFERENCE_BATCH   = 4
-INFERENCE_WORKERS = 12
-INFERENCE_LIMIT   = 5000   # set to an integer for quick testing (e.g. 10); None → all
-VOXEL_SIZE        = 0.10
-FEAT_MODE         = os.getenv("FEAT_MODE")  # "none"|"ri"|"v"|"rvi" (must match training)
-
-# --- Prototype learning (quality-first defaults) ---
-MAX_PASSES        = 3
-SAMPLE_PER_FRAME  = 200_000
-USE_FP16_MATMUL   = True
-SEED              = 42
-DIST_EDGES        = [0.0, 15.0, 30.0, 60.0, 120.0]   # 5 edges → 4 bins
-
-# NOTE: user-tuned defaults (may have wrong length); we auto-fix below
-DIST_RATIOS       = [0.35, 0.30, 0.20, 0.10, 0.05]
 
 def _align_ratios(edges, ratios):
     """
@@ -63,41 +25,93 @@ def _align_ratios(edges, ratios):
         r = [x / s for x in r]
     return r
 
-ALIGNED_DIST_RATIOS = _align_ratios(DIST_EDGES, DIST_RATIOS)
+# --- Device ---
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# --- Segmentation ---
-SMOOTH_ITERS      = 2
-NEIGHBOR_RANGE    = 1
-MIN_COMPONENT     = 80
-ASSIGN_CHUNK      = 4_000_000
-USE_FP16_ASSIGN   = True
-TAU_REJECT        = 0.10      # (k-means) low-confidence cosine → noise label
-NOISE_LABEL       = -1
-RANGE_GATE_M      = 1.5       # depth-aware smoothing (meters)
+# --- Core paths---
+INFER_DIR   = Path(os.environ.get("INFERENCE_OUTPUT_DIR"))        # where *_inference.pth live
+OUT_DIR     = Path(os.environ.get("SEGMENTATION_OUT_DIR"))        # root for outputs
+DATA_DIR    = Path(os.getenv("PREPROCESS_OUTPUT_DIR"))
+CKPT_PATH   = Path(os.getenv("TRAIN_CHECKPOINT_PTH"))
+CFG_PATH    = os.getenv("CONFIG_JSON", "").strip()
 
-# --- vMF posterior thresholds (used only if MODE == "vmf") ---
-POSTERIOR_TAU     = 0.10      # global posterior min threshold
-TAU_EDGES         = [0.0, 15.0, 30.0, 60.0]   # per-distance posterior thresholds
-TAU_MAP           = [0.08, 0.10, 0.12, 0.14]  # near→far; used if you prefer distance-aware instead of global
+FEAT_MODE         = os.getenv("FEAT_MODE")
+VOXEL_SIZE        = 0.10
+USE_FP16_MATMUL   = True
+SEED              = 42
 
-# --- Feature augmentation (better separation) ---
-FEATURE_CFG = {
-    "use_range":  True,  "range_scale": 50.0,
-    "use_height": False,  "height_scale": 3.0,
-    "use_speed":  False,   "speed_scale": 90.0,
-    # dead-zone parameters for speed (tune if needed)
-    "speed_deadzone_per_m": 0.02,   # m/s per meter
-    "speed_deadzone_min":   0.20,   # m/s
-    "speed_deadzone_max":   1.20,   # m/s
-    # optional: keep False at first; turn on after you export vel_signed
-    "use_speed_signed":     True,
-}
+# --- Execution toggles ---
+RUN_INFERENCE = True    # set True to call inference.py first
+DO_FIT        = True    # learn prototypes (False -> load from PROTOS_PATH)
+MET_OVERRIDES = None  # will be filled if config provides metrics
 
 # --- DataLoader I/O knobs ---
 DL_WORKERS    = 4
 DL_PREFETCH   = 2
 DL_BATCH_IO   = 16
 DL_PIN_MEMORY = True
+
+if CFG_PATH and Path(CFG_PATH).exists():
+    with open(CFG_PATH, "r") as f:
+        _cfg = json.load(f)
+
+    K = int(_cfg.get("K", 10)) # number of clusters
+    ZIP_PATH     = OUT_DIR / f"labels_k{K}.zip"                        # labels go into this single zip (fresh each run)
+    PROTOS_PATH  = OUT_DIR / "prototypes.pt"
+    RUN_CFG_JSON = OUT_DIR / "run_config.json"
+    METRICS_CSV  = OUT_DIR / f"metrics_k{K}.csv"
+
+    # --- Segmentation mode ---
+    #   "kmeans": legacy cosine k-means + hard argmax (uses TAU_REJECT)
+    #   "vmf"   : von Mises–Fisher mixture + soft posteriors (uses POSTERIOR_TAU / per-bin posterior map)
+    MODE = _cfg.get("mode", "vmf")  # "kmeans" | "vmf"
+
+    # --- Inference settings (only used if RUN_INFERENCE=True) ---
+    INFERENCE_BATCH   = int(_cfg.get("inference_batch", 8))
+    INFERENCE_WORKERS = int(_cfg.get("inference_workers", 12))
+    _lim = str(_cfg.get("inference_limit", "")).strip()
+    INFERENCE_LIMIT = int(_lim) if _lim.isdigit() else None
+    
+
+    # --- Prototype learning (quality-first defaults) ---
+    MAX_PASSES        = int(_cfg.get("max_passes", 3))
+    SAMPLE_PER_FRAME  = int(_cfg.get("sample_per_frame", 50000))
+    DIST_EDGES        = _cfg.get("dist_edges", [0.0, 15.0, 30.0, 60.0, 120.0])   # 5 edges → 4 bins
+    DIST_RATIOS       = _cfg.get("dist_ratios", [0.35, 0.30, 0.20, 0.15])
+    ALIGNED_DIST_RATIOS = _align_ratios(DIST_EDGES, DIST_RATIOS)
+
+    # --- Segmentation ---
+    SMOOTH_ITERS      = int(_cfg.get("smooth_iters", 1))
+    NEIGHBOR_RANGE    = int(_cfg.get("neighbor_range", 1)) 
+    MIN_COMPONENT     = int(_cfg.get("min_component", 80))  # connected component pruning
+    ASSIGN_CHUNK      = 4_000_000
+    USE_FP16_ASSIGN   = True
+    TAU_REJECT        = 0.10      # (k-means) low-confidence cosine → noise label
+    NOISE_LABEL       = -1
+    RANGE_GATE_M      = float(_cfg.get("range_gate_m", 0.8))      # depth-aware smoothing (meters)
+
+    # --- vMF posterior thresholds (used only if MODE == "vmf") ---
+    POSTERIOR_TAU     = float(_cfg.get("posterior_tau", 0.13))     # global posterior min threshold
+    TAU_EDGES         = _cfg.get("tau_edges", [0.0, 15.0, 30.0, 60.0])   # per-distance posterior thresholds
+    TAU_MAP           = _cfg.get("tau_map", [0.12,0.14,0.16,0.18])  # near→far; used if you prefer distance-aware instead of global
+
+
+    FEATURE_CFG = {}
+    if "feature_cfg" in _cfg and isinstance(_cfg["feature_cfg"], dict):
+        FEATURE_CFG.update(_cfg["feature_cfg"])
+
+    # ---- metrics (silhouette/motion) ----
+    _m = _cfg.get("metrics", {})
+    if _m:
+        MET_OVERRIDES = dict(
+            sample_n=int(_m.get("sample_n", 200_000)),
+            speed_tau_policy=_m.get("speed_tau_policy", "value"),
+            speed_tau_list=tuple(_m.get("speed_tau_list", [0.3, 0.5, 1.0])),
+        )
+
+# Fallback if no config provided
+if MET_OVERRIDES is None:
+    MET_OVERRIDES = dict(sample_n=200_000, speed_tau_policy="value", speed_tau_list=(0.3, 0.5, 1.0))
 
 # Robust import (package vs flat)
 try:
@@ -234,7 +248,7 @@ def _fit_prototypes() -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         "min_component": MIN_COMPONENT,
         "tau_reject": TAU_REJECT,
         "posterior_tau": POSTERIOR_TAU,
-        "tau_edges": DIST_EDGES,
+        "tau_edges": TAU_EDGES,
         "tau_map": TAU_MAP,
         "noise_label": NOISE_LABEL,
         "range_gate_m": RANGE_GATE_M,
@@ -339,11 +353,8 @@ def _compute_metrics(accum):
     evaluate_accumulated_metrics(
         accum,
         out_csv=METRICS_CSV,
-        sample_n=200_000,
         distance="cosine",
-        speed_tau_policy="value",
-        speed_tau_list=(0.3, 0.5, 1.0),
-        labels2d_all=None     # or pass your collected 2D labels if you have them
+        **MET_OVERRIDES,
     )
     print(f"[segment_once] Wrote -> {METRICS_CSV}")
 
