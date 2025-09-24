@@ -45,7 +45,7 @@ export INFERENCE_OUTPUT_DIR="$TMP_ROOT/${TS}_inference_output_${PREPROCESS_FOLDE
 export SEGMENTATION_OUT_DIR="$TMP_ROOT/${TS}_unsup_outputs_${PREPROCESS_FOLDERS}_${FEAT_MODE}"
 mkdir -p "$INFERENCE_OUTPUT_DIR" "$SEGMENTATION_OUT_DIR"
 
-cp -r "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/20250924_0137_inference_output_river_island_01_Day_rvi/*" "$INFERENCE_OUTPUT_DIR/" 
+rsync -a --progress "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/20250924_0137_inference_output_river_island_01_Day_rvi/" "$INFERENCE_OUTPUT_DIR/"
 
 CFG="$TMP_ROOT/cfg.json"
 cat > "$CFG" <<'JSON'
@@ -60,7 +60,7 @@ cat > "$CFG" <<'JSON'
   "feature_cfg": {
     "use_range": true,   "range_scale": 70.0,
     "use_height": true,  "height_scale": 2.5,
-    "use_speed": true,   "speed_scale": 25.0,
+    "use_speed": true,   "speed_scale": 10.0,
     "speed_deadzone_per_m": 0.02,
     "speed_deadzone_min": 0.18,
     "speed_deadzone_max": 0.80,
