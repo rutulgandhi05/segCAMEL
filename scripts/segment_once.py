@@ -41,14 +41,14 @@ USE_FP16_MATMUL   = True
 SEED              = 42
 
 # --- Execution toggles ---
-RUN_INFERENCE = True    # set True to call inference.py first
+RUN_INFERENCE = False    # set True to call inference.py first
 DO_FIT        = True    # learn prototypes (False -> load from PROTOS_PATH)
 MET_OVERRIDES = None  # will be filled if config provides metrics
 
 # --- DataLoader I/O knobs ---
-DL_WORKERS    = 4
-DL_PREFETCH   = 2
-DL_BATCH_IO   = 16
+DL_WORKERS    = 16
+DL_PREFETCH   = 1
+DL_BATCH_IO   = 4
 DL_PIN_MEMORY = True
 
 if CFG_PATH and Path(CFG_PATH).exists():

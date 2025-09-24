@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH -J Inference
-#SBATCH -o logs/inference_output_rvi.txt
-#SBATCH -e logs/inference_error_rvi.txt
+#SBATCH -o logs/inference_output_rvi_%j.txt
+#SBATCH -e logs/inference_error_rvi_%j.txt
 #SBATCH -c 32
 #SBATCH -N 1
 #SBATCH -n 1
@@ -45,6 +45,8 @@ export INFERENCE_OUTPUT_DIR="$TMP_ROOT/${TS}_inference_output_${PREPROCESS_FOLDE
 export SEGMENTATION_OUT_DIR="$TMP_ROOT/${TS}_unsup_outputs_${PREPROCESS_FOLDERS}_${FEAT_MODE}"
 mkdir -p "$INFERENCE_OUTPUT_DIR" "$SEGMENTATION_OUT_DIR"
 
+cp -r "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/20250924_0137_inference_output_river_island_01_Day_rvi/*" "$INFERENCE_OUTPUT_DIR/" 
+
 CFG="$TMP_ROOT/cfg.json"
 cat > "$CFG" <<'JSON'
 {
@@ -56,9 +58,9 @@ cat > "$CFG" <<'JSON'
   "inference_limit": 2000,
 
   "feature_cfg": {
-    "use_range": true,   "range_scale": 80.0,
-    "use_height": true,  "height_scale": 3.0,
-    "use_speed": true,   "speed_scale": 90.0,
+    "use_range": true,   "range_scale": 70.0,
+    "use_height": true,  "height_scale": 2.5,
+    "use_speed": true,   "speed_scale": 25.0,
     "speed_deadzone_per_m": 0.02,
     "speed_deadzone_min": 0.18,
     "speed_deadzone_max": 0.80,
@@ -89,10 +91,10 @@ JSON
 
 export CONFIG_JSON="$CFG"
 
-python -m scripts.preprocess
+# python -m scripts.preprocess
 python -m scripts.segment_once
 
-cp -r "$INFERENCE_OUTPUT_DIR/" "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/"
+#cp -r "$INFERENCE_OUTPUT_DIR/" "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/"
 cp -r "$SEGMENTATION_OUT_DIR/" "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/"
 cp -r "$CFG" "$HERCULES_PROCESSED/${TRAIN_FOLDER_STAMP}_${FEAT_MODE}/"
 echo "[INFO] Job completed successfully."
