@@ -51,18 +51,18 @@ CFG="$TMP_ROOT/cfg.json"
 cat > "$CFG" <<'JSON'
 {
   "mode": "vmf",
-  "K": 10,
+  "K": 12,
 
   "inference_batch": 4,
   "inference_workers": 12,
   "inference_limit": 2000,
 
   "feature_cfg": {
-    "use_range": true,   "range_scale": 70.0,
-    "use_height": true,  "height_scale": 2.5,
+    "use_range": false,   "range_scale": 70.0,
+    "use_height": false,  "height_scale": 2.5,
     "use_speed": true,   "speed_scale": 10.0,
-    "speed_deadzone_per_m": 0.02,
-    "speed_deadzone_min": 0.18,
+    "speed_deadzone_per_m": 0.01,
+    "speed_deadzone_min": 0.1,
     "speed_deadzone_max": 0.80,
     "use_speed_signed": false
   },
@@ -72,10 +72,10 @@ cat > "$CFG" <<'JSON'
   "dist_edges": [0.0, 15.0, 30.0, 60.0, 120.0],
   "dist_ratios": [0.35, 0.30, 0.20, 0.15],
 
-  "smooth_iters": 1,
+  "smooth_iters": 0,
   "neighbor_range": 1,
   "min_component": 80,
-  "range_gate_m": 0.8,
+  "range_gate_m": 0.2,
 
   "posterior_tau": 0.13,
   "tau_edges": [0.0, 15.0, 30.0, 60.0],

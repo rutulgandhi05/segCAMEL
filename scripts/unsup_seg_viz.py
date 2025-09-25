@@ -5,6 +5,7 @@ import torch
 import zipfile
 from tqdm import tqdm
 from datetime import datetime
+import math
 
 try:
     import open3d as o3d
@@ -14,16 +15,17 @@ except Exception:
 
 
 # ---- CURRENT run (the one you want to view) ----
-INFER_DIR  = Path(r"data\11092025_1205_segcamel_train_output_epoch_50_rvi\21092025_0433_inference_output_rvi")
-OUT_DIR    = Path(r"data\11092025_1205_segcamel_train_output_epoch_50_rvi\21092025_0433_unsup_outputs_rvi")
-K          = 10  # used only for initial palette sizing
+INFER_DIR  = Path(r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250924_0137_inference_output_river_island_01_Day_rvi")
+OUT_DIR    = Path(r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250925_0857_unsup_outputs_river_island_01_Day_rvi")
+K          = 8  # used only for initial palette sizing
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
 PREFER_ZIP = True
 
 # ---- REFERENCE labels (the run whose colors you want to copy) ----
-ALIGN_TO_REF   = True  # turn OFF to color current labels directly
-REF_LABELS_DIR = OUT_DIR / f"labels_k{K}"
+# For cross-run comparability (e.g., align A3 colors to A2), point these to the reference run.
+ALIGN_TO_REF   = True
+REF_LABELS_DIR = OUT_DIR / f"labels_k{K}"   # change to your baseline run path if needed
 REF_LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
 REF_PREFER_ZIP = True
 
@@ -34,7 +36,7 @@ VIEW_MODE = "o3d"  # "labels" or "o3d"
 # Exports (only used in VIEW_MODE="labels")
 SAVE_PLY = False
 SAVE_PNG = False
-PLY_LIMIT: Optional[int] = None  # set to an int to cap number of exported frames
+PLY_LIMIT: Optional[int] = None  # cap number of exported frames
 PNG_W, PNG_H = 1600, 1200
 
 # Visualization knobs
@@ -43,8 +45,20 @@ FADE_NON_VISIBLE = True
 FADE_COLOR  = np.array([180, 180, 180], dtype=np.uint8)
 NOISE_COLOR = np.array([128, 128, 128], dtype=np.uint8)
 
+# Distinct palette instead of random (improves cluster separability by color)
+USE_DISTINCT_PALETTE = True
+
+# Label coloring policy in "labels" mode: "id" or "by_speed"
+LABEL_COLOR_POLICY = "id"
+
+# --- Speed visualisation defaults ---
+# Modes: "off" (labels), "mag" (|v|), "signed" (v±), "fused" (labels tinted by |v|)
+SPEED_VIS_MODE = "off"
+SPEED_TAU = 0.5            # m/s threshold shown in stats & fused blending
+SPEED_CLIP_PCT = 99.0      # percentile for color scaling (robust to outliers)
+
 # Debug / logging
-VERBOSE = True  # flip to False to quiet logs
+VERBOSE = True
 
 def _dbg(msg: str):
     if VERBOSE:
@@ -54,16 +68,48 @@ def _dbg(msg: str):
 # ==============================
 # Palette & helper functions
 # ==============================
-def _make_palette(k: int, seed: int = 0) -> np.ndarray:
-    _dbg(f"Creating palette of size {k} with seed {seed}")
+def _hsv_to_rgb(h, s, v):
+    """h in [0,1], s,v in [0,1]"""
+    i = int(h * 6.0)
+    f = h * 6.0 - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    i = i % 6
+    if i == 0: r,g,b = v,t,p
+    elif i == 1: r,g,b = q,v,p
+    elif i == 2: r,g,b = p,v,t
+    elif i == 3: r,g,b = p,q,v
+    elif i == 4: r,g,b = t,p,v
+    else: r,g,b = v,p,q
+    return int(r*255), int(g*255), int(b*255)
+
+def _make_palette_distinct(k: int, seed: int = 0) -> np.ndarray:
+    """Evenly spaced hues with golden-angle offsets; high contrast."""
+    rng = np.random.default_rng(seed)
+    base = []
+    phi = (math.sqrt(5) - 1) / 2.0  # golden ratio conjugate ~0.618
+    h0 = rng.random()
+    for i in range(k):
+        h = (h0 + i * phi) % 1.0
+        s = 0.85
+        v = 0.95
+        base.append(_hsv_to_rgb(h, s, v))
+    return np.array(base, dtype=np.uint8)
+
+def _make_palette_random(k: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     base = rng.integers(0, 255, size=(k, 3), dtype=np.uint8)
     base = np.maximum(base, 40)  # avoid near-black
     return base
 
+def _make_palette(k: int, seed: int = 0) -> np.ndarray:
+    if USE_DISTINCT_PALETTE:
+        return _make_palette_distinct(k, seed=seed)
+    return _make_palette_random(k, seed=seed)
+
 def _labels_to_colors(labels: np.ndarray, palette: np.ndarray, noise_label: int = NOISE_LABEL) -> np.ndarray:
     if labels.size == 0:
-        _dbg("labels_to_colors: empty labels array")
         return np.zeros((0, 3), dtype=np.float32)
     colors = np.empty((labels.size, 3), dtype=np.uint8)
     noise_mask = (labels == noise_label)
@@ -74,13 +120,57 @@ def _labels_to_colors(labels: np.ndarray, palette: np.ndarray, noise_label: int 
     colors[noise_mask]  = NOISE_COLOR
     return colors.astype(np.float32) / 255.0
 
+# --- speed colormaps ---
+def _cmap_mag(x: np.ndarray) -> np.ndarray:
+    x = np.clip(x, 0.0, 1.0).astype(np.float32)
+    c = np.zeros((x.size, 3), dtype=np.float32)
+    mid = 0.5
+    lo = x < mid
+    hi = ~lo
+    if np.any(lo):
+        t = (x[lo] / mid)[:, None]
+        c[lo] = np.array([0.0, 0.0, 1.0]) * (1 - t) + np.array([0.0, 1.0, 1.0]) * t
+    if np.any(hi):
+        t = ((x[hi] - mid) / (1 - mid))[:, None]
+        c[hi] = np.array([0.0, 1.0, 1.0]) * (1 - t) + np.array([1.0, 1.0, 0.0]) * t
+    return c
+
+def _cmap_signed(v: np.ndarray, vmax: Optional[float] = None) -> np.ndarray:
+    v = v.astype(np.float32)
+    if vmax is None or vmax <= 0:
+        vmax = np.percentile(np.abs(v), SPEED_CLIP_PCT) + 1e-6
+    x = np.clip(v / vmax, -1.0, 1.0)
+    c = np.zeros((v.size, 3), dtype=np.float32)
+    neg = x < 0
+    if np.any(neg):
+        t = (-x[neg])[:, None]
+        c[neg] = np.array([1.0, 1.0, 1.0]) * (1 - t) + np.array([0.0, 0.0, 1.0]) * t
+    pos = ~neg
+    if np.any(pos):
+        t = (x[pos])[:, None]
+        c[pos] = np.array([1.0, 1.0, 1.0]) * (1 - t) + np.array([1.0, 0.0, 0.0]) * t
+    return c
+
+def _get_speed_payload(payload) -> Optional[np.ndarray]:
+    """
+    Returns |v| as float array if available, else None.
+    Accepts either 'speed' (|v|) or 'vel_signed' tensors in payload.
+    """
+    v = payload.get("speed", None)
+    if v is None:
+        vs = payload.get("vel_signed", None)
+        if vs is not None:
+            v = torch.as_tensor(vs).float().abs()
+    if v is None:
+        return None
+    return v.numpy().astype(np.float32).reshape(-1)
+
 # ==============================
 # Label stores (dir/zip)
 # ==============================
 def _labels_store_exists(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tuple[bool, str]:
     zip_ok = zip_path.exists()
     dir_ok = dir_path.exists()
-    _dbg(f"Labels store check: prefer_zip={prefer_zip} dir_ok={dir_ok} zip_ok={zip_ok}")
     if prefer_zip and zip_ok:
         return True, "zip"
     if dir_ok:
@@ -91,72 +181,50 @@ def _labels_store_exists(dir_path: Path, zip_path: Path, prefer_zip: bool) -> Tu
 
 def _zip_list_labels(zip_path: Path) -> Dict[str, str]:
     mapping = {}
-    _dbg(f"Listing labels in zip: {zip_path}")
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for n in tqdm(zf.namelist(), desc="Zip entries", leave=False):
+        for n in zf.namelist():
             if n.endswith("_clusters.npz"):
                 stem = Path(n).stem.replace("_clusters", "")
                 mapping[stem] = n
-    _dbg(f"Found {len(mapping)} *_clusters.npz in zip")
     return mapping
 
 def _zip_load_labels(zip_path: Path, name_in_zip: str) -> np.ndarray:
-    _dbg(f"Loading labels from zip: {zip_path} :: {name_in_zip}")
     with zipfile.ZipFile(zip_path, "r") as zf:
         with zf.open(name_in_zip, "r") as fh:
             with np.load(fh) as data:
-                arr = data["labels"].astype(np.int64)
-                _dbg(f"Loaded labels shape={arr.shape}, dtype={arr.dtype}")
-                return arr
+                return data["labels"].astype(np.int64)
 
 def _build_current_label_loader() -> Tuple[Callable[[str], np.ndarray], Dict[str, str], str]:
     ok, mode = _labels_store_exists(LABELS_DIR, LABELS_ZIP, PREFER_ZIP)
     if not ok:
         raise FileNotFoundError(f"No labels found for CURRENT run (checked {LABELS_DIR} and {LABELS_ZIP}).")
-    _dbg(f"Current label store mode: {mode}")
     if mode == "zip":
         label_map = _zip_list_labels(LABELS_ZIP)
         loader = lambda stem: _zip_load_labels(LABELS_ZIP, label_map[stem])
     else:
-        label_map = {}
-        for p in tqdm(sorted(LABELS_DIR.glob("*_clusters.npz")), desc="Index labels (dir)", leave=False):
-            label_map[p.stem.replace("_clusters", "")] = str(p)
+        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(LABELS_DIR.glob("*_clusters.npz"))}
         def loader(stem: str) -> np.ndarray:
-            _dbg(f"Loading labels from dir: {label_map[stem]}")
-            arr = np.load(label_map[stem])["labels"].astype(np.int64)
-            _dbg(f"Loaded labels shape={arr.shape}, dtype={arr.dtype}")
-            return arr
-    _dbg(f"Indexed {len(label_map)} label files (current)")
+            return np.load(label_map[stem])["labels"].astype(np.int64)
     return loader, label_map, mode
 
 def _build_ref_label_loader() -> Tuple[Optional[Callable[[str], np.ndarray]], Dict[str, str], str]:
     ok, mode = _labels_store_exists(REF_LABELS_DIR, REF_LABELS_ZIP, REF_PREFER_ZIP)
     if not ok:
-        _dbg("No reference labels store available")
         return None, {}, "none"
-    _dbg(f"Reference label store mode: {mode}")
     if mode == "zip":
         label_map = _zip_list_labels(REF_LABELS_ZIP)
         loader = lambda stem: _zip_load_labels(REF_LABELS_ZIP, label_map[stem])
     else:
-        label_map = {}
-        for p in tqdm(sorted(REF_LABELS_DIR.glob("*_clusters.npz")), desc="Index REF labels (dir)", leave=False):
-            label_map[p.stem.replace("_clusters", "")] = str(p)
+        label_map = {p.stem.replace("_clusters", ""): str(p) for p in sorted(REF_LABELS_DIR.glob("*_clusters.npz"))}
         def loader(stem: str) -> np.ndarray:
-            _dbg(f"Loading REF labels from dir: {label_map[stem]}")
-            arr = np.load(label_map[stem])["labels"].astype(np.int64)
-            _dbg(f"Loaded REF labels shape={arr.shape}, dtype={arr.dtype}")
-            return arr
-    _dbg(f"Indexed {len(label_map)} label files (reference)")
+            return np.load(label_map[stem])["labels"].astype(np.int64)
     return loader, label_map, mode
 
 # ==============================
 # Inference dump mapping
 # ==============================
 def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
-    _dbg(f"Building dump maps from: {infer_dir}")
     dumps = sorted(list(infer_dir.glob("*_inference.pth")))
-    _dbg(f"Found {len(dumps)} inference dumps")
     by_filename = {p.stem.replace("_inference", ""): p for p in dumps}
     by_payload = {}
     for p in tqdm(dumps, desc="Scan dumps for payload stems", leave=False):
@@ -165,56 +233,38 @@ def _build_dump_maps(infer_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]
             s = payload.get("image_stem", None)
             if isinstance(s, str):
                 by_payload[s] = p
-        except Exception as e:
-            _dbg(f"Failed reading dump {p.name}: {e}")
-    _dbg(f"Payload stems mapped: {len(by_payload)}")
+        except Exception:
+            pass
     return by_filename, by_payload
 
 def _resolve_dump_path(stem: str, by_filename: Dict[str, Path], by_payload: Dict[str, Path]) -> Optional[Path]:
-    path = by_filename.get(stem) or by_payload.get(stem)
-    if path is None:
-        _dbg(f"Resolve dump path: stem '{stem}' NOT FOUND")
-    else:
-        _dbg(f"Resolve dump path: stem '{stem}' -> {path.name}")
-    return path
+    return by_filename.get(stem) or by_payload.get(stem)
 
 # ==============================
 # Label alignment to reference
 # ==============================
 def _remap_to_reference(cur: np.ndarray, ref: np.ndarray, noise_label: int = NOISE_LABEL) -> np.ndarray:
-    """
-    Greedy overlap matching: map each current cluster ID to the reference cluster ID
-    with which it overlaps the most. Noise label is preserved as-is.
-    """
-    _dbg("Remapping current labels to reference IDs (greedy overlap)")
     cur = cur.astype(np.int64)
     ref = ref.astype(np.int64)
     out = cur.copy()
 
     m = (cur >= 0) & (ref >= 0)
     if not np.any(m):
-        _dbg("No valid overlaps to map (all labels < 0).")
         return out
 
     cur_ids = np.unique(cur[m])
     ref_ids = np.unique(ref[m])
-    _dbg(f"Unique IDs – cur: {len(cur_ids)}, ref: {len(ref_ids)}")
-
     cur_index = {c: i for i, c in enumerate(cur_ids)}
     ref_index = {r: j for j, r in enumerate(ref_ids)}
     C = np.zeros((len(cur_ids), len(ref_ids)), dtype=np.int64)
 
     pairs = np.stack([cur[m], ref[m]], axis=1)
-    _dbg(f"Accumulating overlaps for {pairs.shape[0]} label pairs")
-    for c_id, r_id in tqdm(pairs, desc="Count overlaps", leave=False):
+    for c_id, r_id in pairs:
         C[cur_index[c_id], ref_index[r_id]] += 1
 
     mapping: Dict[int, int] = {}
     C_work = C.copy()
-    used_rows = set()
-    used_cols = set()
-
-    _dbg("Starting greedy assignment")
+    used_rows, used_cols = set(), set()
     while True:
         best = None
         best_val = 0
@@ -231,19 +281,16 @@ def _remap_to_reference(cur: np.ndarray, ref: np.ndarray, noise_label: int = NOI
         i, j = best
         mapping[cur_ids[i]] = ref_ids[j]
         used_rows.add(i); used_cols.add(j)
-        _dbg(f"Map cur {cur_ids[i]} -> ref {ref_ids[j]} (overlap={best_val})")
 
-    for c_id, r_id in tqdm(mapping.items(), desc="Apply mapping", leave=False):
+    for c_id, r_id in mapping.items():
         out[cur == c_id] = r_id
-
     out[cur == noise_label] = noise_label
-    _dbg(f"Remap complete. Mapping size={len(mapping)}")
     return out
 
 # ==============================
 # Open3D helpers
 # ==============================
-def _reset_camera(vis, pcd, zoom=0.7):
+def _reset_camera(vis, pcd, zoom=0.9):
     try:
         if hasattr(vis, "reset_view_point"):
             vis.reset_view_point(True)
@@ -264,7 +311,6 @@ def _reset_camera(vis, pcd, zoom=0.7):
 
 def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
     if not _HAS_O3D: return
-    _dbg(f"Saving PLY: {path}")
     p = o3d.geometry.PointCloud()
     p.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
     p.colors = o3d.utility.Vector3dVector(rgb.astype(np.float64))
@@ -272,7 +318,6 @@ def _save_ply(path: Path, xyz: np.ndarray, rgb: np.ndarray):
 
 def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_path: Optional[Path]):
     if not _HAS_O3D: return
-    _dbg(f"Open3D snapshot: title='{title}' save={'yes' if png_path else 'no'}")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name=title, width=PNG_W, height=PNG_H, visible=True)
     pcd = o3d.geometry.PointCloud()
@@ -289,7 +334,6 @@ def _o3d_show_and_snapshot(xyz: np.ndarray, rgb: np.ndarray, title: str, png_pat
 # Export mode (PLY/PNG)
 # ==============================
 def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarray):
-    _dbg(f"Exporting labels to PLY/PNG. out_dir={out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
     ply_dir = out_dir / "ply"
     png_dir = out_dir / "png"
@@ -298,11 +342,10 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
 
     cur_loader, cur_map, _ = _build_current_label_loader()
     ref_loader, ref_map, _ = _build_ref_label_loader() if ALIGN_TO_REF else (None, {}, "none")
-
     by_fn, by_pl = _build_dump_maps(infer_dir)
     exported = 0
 
-    for stem in tqdm(sorted(cur_map.keys()), desc="Export frames", unit="frame"):
+    for stem in sorted(cur_map.keys()):
         dump = _resolve_dump_path(stem, by_fn, by_pl)
         if dump is None:
             print(f"[export] missing dump for stem={stem}, skipping.")
@@ -312,7 +355,6 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
             cur_lab = cur_loader(stem)
             payload = torch.load(dump, map_location="cpu")
             coord   = payload["coord_raw"].numpy().astype(np.float32)
-            _dbg(f"Loaded frame '{stem}': labels={cur_lab.shape[0]} points={coord.shape[0]}")
         except Exception as e:
             print(f"[export] error loading {stem}: {e}")
             continue
@@ -334,9 +376,9 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
 
         max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
         if max_label > palette.shape[0]:
-            _dbg(f"Palette too small ({palette.shape[0]}), resizing to {max_label}")
             palette = _make_palette(max_label, seed=0)
 
+        # plain ID-based colors
         cols = _labels_to_colors(cur_lab, palette)
         if FADE_NON_VISIBLE and "mask" in payload:
             mask = payload["mask"].numpy().astype(bool)
@@ -349,7 +391,6 @@ def _export_labels_to_ply_png(infer_dir: Path, out_dir: Path, palette: np.ndarra
 
         exported += 1
         if PLY_LIMIT is not None and exported >= int(PLY_LIMIT):
-            _dbg(f"PLY_LIMIT reached: {PLY_LIMIT}")
             break
 
     print(f"[export] done. exported={exported}, PLY={SAVE_PLY}, PNG={SAVE_PNG}, align={ALIGN_TO_REF}")
@@ -370,7 +411,6 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     if not stems:
         print("No overlapping frames found between inference dumps and labels.")
         return
-    _dbg(f"Viewer initialized with {len(stems)} frame(s). First: {stems[0]}")
 
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name="Unsupervised Segmentation Viewer", width=win_w, height=win_h)
@@ -380,20 +420,118 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
 
     state = {
         "i": 0,
-        "mode": "labels",     # "labels" or "range"
+        "mode": "labels",           # "labels" or "range" (legacy)
         "fade": FADE_NON_VISIBLE,
         "palette": palette_init.copy(),
-        "palette_seed": 0
+        "palette_seed": 0,
+        "speed_mode": SPEED_VIS_MODE,   # "off", "mag", "signed", "fused"
+        "speed_tau": float(SPEED_TAU),
+        "label_color_policy": LABEL_COLOR_POLICY   # "id" or "by_speed"
     }
 
+    def _speed_stats(v: np.ndarray) -> Tuple[float, float]:
+        if v.size == 0:
+            return 0.0, 0.0
+        nz_frac = float((np.abs(v) > state["speed_tau"]).mean())
+        vmax = float(np.percentile(np.abs(v), SPEED_CLIP_PCT)) + 1e-6
+        return nz_frac, vmax
+
+    def _by_speed_colors(payload, labels: np.ndarray) -> Optional[np.ndarray]:
+        v = payload.get("speed", None)
+        if v is None:
+            return None
+        v = v.numpy().astype(np.float32).reshape(-1)
+        lab = labels.astype(np.int64)
+        m = lab >= 0
+        if not np.any(m):
+            return None
+        # mean |v| per label
+        vmax = float(np.percentile(np.abs(v[m]), SPEED_CLIP_PCT)) + 1e-6
+        mean_v = {}
+        for lid in np.unique(lab[m]):
+            li = (lab == lid)
+            mean_v[int(lid)] = float(np.mean(np.abs(v[li])))
+        # normalize to [0,1] for palette mapping (cool->warm)
+        lids = sorted(mean_v.keys())
+        vals = np.array([min(mean_v[l], vmax)/vmax for l in lids], dtype=np.float32)
+        # build a small gradient palette blue->red
+        pal = np.zeros((len(lids), 3), dtype=np.float32)
+        for i, t in enumerate(vals):
+            pal[i] = _cmap_signed(np.array([ (t - 0.5)*2.0 ]), vmax=1.0)[0]  # [-1,1] -> blue/white/red
+        # assign
+        id2row = {lid: i for i, lid in enumerate(lids)}
+        cols = np.empty((lab.size, 3), dtype=np.float32)
+        for idx in range(lab.size):
+            lid = int(lab[idx])
+            if lid < 0:
+                cols[idx] = NOISE_COLOR / 255.0
+            else:
+                cols[idx] = pal[id2row[lid]]
+        # print a short summary
+        top = sorted(mean_v.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        _dbg("Top labels by mean |v|: " + ", ".join([f"{lid}:{mv:.2f}" for lid,mv in top]))
+        return cols
+
     def _compute_colors(payload, labels: np.ndarray) -> np.ndarray:
-        if state["mode"] == "range":
-            xyz = payload["coord_raw"].numpy().astype(np.float32)
-            r = np.linalg.norm(xyz, axis=1)
-            r = (r - r.min()) / (np.ptp(r) + 1e-6)
-            cols = np.stack([r, r, r], axis=1).astype(np.float32)
+        # --- speed-only modes ---
+        if state["speed_mode"] == "mag":
+            v = _get_speed_payload(payload)
+            if v is None:
+                return _labels_to_colors(labels, state["palette"])
+            vmax = float(np.percentile(np.abs(v), SPEED_CLIP_PCT)) + 1e-6
+            x = np.clip(np.abs(v) / vmax, 0.0, 1.0)
+            cols = _cmap_mag(x)
+
+        elif state["speed_mode"] == "signed":
+            vs = payload.get("vel_signed", None)
+            v = vs.numpy().astype(np.float32).reshape(-1) if vs is not None else _get_speed_payload(payload)
+            if v is None:
+                return _labels_to_colors(labels, state["palette"])
+            vmax = float(np.percentile(np.abs(v), SPEED_CLIP_PCT)) + 1e-6
+            cols = _cmap_signed(v, vmax=vmax)
+
+        elif state["speed_mode"] == "fused":
+            # Base label colors
+            base = _labels_to_colors(labels, state["palette"])
+            v = _get_speed_payload(payload)
+            if v is None:
+                cols = base
+            else:
+                vabs = np.abs(v)
+                vmax = float(np.percentile(vabs, SPEED_CLIP_PCT)) + 1e-6
+                tau  = float(state["speed_tau"])
+                # Normalized |v| and a smooth mover mask around τ
+                x = np.clip(vabs / vmax, 0.0, 1.0)
+                delta = max(0.3, 0.2 * vmax)  # soft transition width
+                t = np.clip((vabs - tau) / max(delta, 1e-6), 0.0, 1.0)
+                m = t * t * (3 - 2 * t)       # smoothstep in [0,1]
+                # Red-ish overlay for movers
+                overlay = np.tile(np.array([[1.0, 0.25, 0.25]], dtype=np.float32), (base.shape[0], 1))
+                alpha = 0.70
+                a = (alpha * m)[:, None]
+                cols = (1 - a) * base + a * overlay
+
+            if state["fade"] and "mask" in payload:
+                mask = payload["mask"].numpy().astype(bool)
+                cols[~mask] = FADE_COLOR / 255.0
+            return cols
+
         else:
-            cols = _labels_to_colors(labels, state["palette"])
+            # Label modes (no speed override)
+            if state["mode"] == "range":
+                xyz = payload["coord_raw"].numpy().astype(np.float32)
+                r = np.linalg.norm(xyz, axis=1)
+                r = (r - r.min()) / (np.ptp(r) + 1e-6)
+                cols = np.stack([r, r, r], axis=1).astype(np.float32)
+            else:
+                if state["label_color_policy"] == "by_speed":
+                    cols = _by_speed_colors(payload, labels)
+                    if cols is None:
+                        cols = _labels_to_colors(labels, state["palette"])
+                else:
+                    cols = _labels_to_colors(labels, state["palette"])
+
+        # Common fade path for non-fused modes
         if state["fade"] and "mask" in payload:
             mask = payload["mask"].numpy().astype(bool)
             cols[~mask] = FADE_COLOR / 255.0
@@ -402,14 +540,12 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
     def load_frame(i: int):
         stem = stems[i]
         dump_path = _resolve_dump_path(stem, by_fn, by_pl)
-        _dbg(f"[viewer] Loading frame {i+1}/{len(stems)}: {stem}")
         payload = torch.load(dump_path, map_location="cpu")
         coord   = payload["coord_raw"].numpy().astype(np.float32)
         cur_lab = cur_loader(stem)
 
         if cur_lab.shape[0] != coord.shape[0]:
             n = min(cur_lab.shape[0], coord.shape[0])
-            _dbg(f"[viewer] Truncating: labels={cur_lab.shape[0]} points={coord.shape[0]} -> {n}")
             cur_lab = cur_lab[:n]; coord = coord[:n]
 
         if ALIGN_TO_REF and ref_loader is not None and stem in ref_map:
@@ -419,13 +555,11 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
                     n = min(ref_lab.shape[0], cur_lab.shape[0])
                     ref_lab = ref_lab[:n]; cur_lab = cur_lab[:n]; coord = coord[:n]
                 cur_lab = _remap_to_reference(cur_lab, ref_lab, noise_label=NOISE_LABEL)
-
                 max_label = int(cur_lab[cur_lab >= 0].max()) + 1 if (cur_lab.size and (cur_lab >= 0).any()) else K
                 if max_label > state["palette"].shape[0]:
-                    _dbg(f"[viewer] Grow palette to {max_label}")
                     state["palette"] = _make_palette(max_label, seed=state["palette_seed"])
-            except Exception as e:
-                print(f"[o3d][align] failed for {stem}: {e}")
+            except Exception:
+                pass
 
         pcd.points = o3d.utility.Vector3dVector(coord.astype(np.float64))
         cols = _compute_colors(payload, cur_lab)
@@ -434,33 +568,74 @@ def _view_labels_o3d(infer_dir: Path, palette_init: np.ndarray, win_w=1600, win_
         _reset_camera(vis, pcd, zoom=1.0)
         vis.update_renderer(); vis.poll_events()
         vis.get_render_option().point_size = ro.point_size
-        print(f"[o3d] frame {i+1}/{len(stems)}: {stem} mode={state['mode']} fade={state['fade']} align={ALIGN_TO_REF}")
 
+        # console stats for speed modes
+        if state["speed_mode"] in ("mag", "signed", "fused"):
+            v = payload.get("vel_signed", None) if state["speed_mode"] == "signed" else payload.get("speed", None)
+            if v is None:  # fall back to magnitude if signed missing
+                v = payload.get("speed", None)
+            if v is not None:
+                v = v.numpy().astype(np.float32).reshape(-1)
+                nz_frac, vmax = _speed_stats(v)
+                print(f"[o3d] frame {i+1}/{len(stems)}: {stem}  mode={state['speed_mode']}  τ={state['speed_tau']:.2f} m/s"
+                      f" | movers(>|τ|)={nz_frac*100:.1f}%  vmax@{SPEED_CLIP_PCT}p={vmax:.2f} m/s")
+        else:
+            print(f"[o3d] frame {i+1}/{len(stems)}: {stem} mode={state['mode']} policy={state['label_color_policy']} fade={state['fade']} align={ALIGN_TO_REF}")
+
+    # Key handlers
     def next_frame(_): state["i"] = (state["i"] + 1) % len(stems); load_frame(state["i"]); return False
     def prev_frame(_): state["i"] = (state["i"] - 1) % len(stems); load_frame(state["i"]); return False
     def inc_ps(_): ro.point_size = min(ro.point_size + 1.0, 10.0); vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
     def dec_ps(_): ro.point_size = max(ro.point_size - 1.0, 1.0);  vis.get_render_option().point_size = ro.point_size; vis.update_renderer(); return False
     def reset_v(_): _reset_camera(vis, pcd, zoom=1.0); return False
+
     def toggle_mode(_):
         state["mode"] = "range" if state["mode"] == "labels" else "labels"
-        _dbg(f"[viewer] Toggle mode -> {state['mode']}")
+        state["speed_mode"] = "off"  # leave speed modes when toggling legacy
         load_frame(state["i"]); return False
-    def toggle_fade(_): state["fade"] = not state["fade"]; _dbg(f"[viewer] Toggle fade -> {state['fade']}"); load_frame(state["i"]); return False
+
+    def cycle_speed(_):
+        order = ["off", "mag", "signed", "fused"]   # added "fused"
+        i = order.index(state["speed_mode"]) if state["speed_mode"] in order else 0
+        state["speed_mode"] = order[(i + 1) % len(order)]
+        load_frame(state["i"]); return False
+
+    def cycle_label_policy(_):
+        state["label_color_policy"] = "by_speed" if state["label_color_policy"] == "id" else "id"
+        load_frame(state["i"]); return False
+
+    def tau_inc(_):
+        state["speed_tau"] = state["speed_tau"] + 0.5
+        _dbg(f"[viewer] τ -> {state['speed_tau']:.2f} m/s"); load_frame(state["i"]); return False
+    def tau_dec(_):
+        state["speed_tau"] = state["speed_tau"] - 0.5
+        _dbg(f"[viewer] τ -> {state['speed_tau']:.2f} m/s"); load_frame(state["i"]); return False
+
+    def toggle_fade(_): state["fade"] = not state["fade"]; load_frame(state["i"]); return False
     def cycle_palette(_):
         state["palette_seed"] += 1
         sz = max(K, state["palette"].shape[0])
-        _dbg(f"[viewer] Cycle palette seed -> {state['palette_seed']} (size {sz})")
         state["palette"] = _make_palette(sz, seed=state["palette_seed"])
         load_frame(state["i"]); return False
-    def quit_v(_): _dbg("[viewer] Quit requested"); return True
+    def quit_v(_): return True
 
+    # Bindings
     vis.register_key_callback(ord("N"), next_frame)
     vis.register_key_callback(ord("P"), prev_frame)
     vis.register_key_callback(ord("]"), inc_ps)
     vis.register_key_callback(ord("["), dec_ps)
     vis.register_key_callback(ord("R"), reset_v)
-    vis.register_key_callback(ord("G"), toggle_mode)   # labels <-> range
-    vis.register_key_callback(ord("V"), toggle_fade)   # fade non-visible
+    vis.register_key_callback(ord("G"), toggle_mode)     # labels <-> range
+    vis.register_key_callback(ord("S"), cycle_speed)     # off -> |v| -> signed -> fused
+    vis.register_key_callback(ord("M"), cycle_label_policy)  # id <-> by_speed
+    # τ controls (robust to keyboard layouts)
+    vis.register_key_callback(ord('='), tau_inc)
+    vis.register_key_callback(ord('+'), tau_inc)
+    vis.register_key_callback(ord('-'), tau_dec)
+    vis.register_key_callback(ord('_'), tau_dec)
+    vis.register_key_callback(ord('K'), tau_inc)         # backups
+    vis.register_key_callback(ord('J'), tau_dec)
+    vis.register_key_callback(ord("V"), toggle_fade)
     vis.register_key_callback(ord("C"), cycle_palette)
     vis.register_key_callback(ord("Q"), quit_v)
 
@@ -494,7 +669,7 @@ def _sanity_print():
     if ALIGN_TO_REF:
         n_ref, ref_store = _count_labels(REF_LABELS_DIR, REF_LABELS_ZIP, REF_PREFER_ZIP)
         print(f"[paths] REF labels  = {REF_LABELS_DIR if ref_store=='dir' else REF_LABELS_ZIP} ({n_ref} files) store={ref_store}")
-    print(f"[mode ] VIEW_MODE={VIEW_MODE} | SAVE_PLY={SAVE_PLY} SAVE_PNG={SAVE_PNG} O3D={_HAS_O3D} align={ALIGN_TO_REF}")
+    print(f"[mode ] VIEW_MODE={VIEW_MODE} | O3D={_HAS_O3D} align={ALIGN_TO_REF}")
 
 def main():
     if not INFER_DIR.exists():

@@ -1,140 +1,105 @@
-# scripts/analyze_metrices.py  — grouped plots + percent deltas (no args)
-import pandas as pd, numpy as np
+#!/usr/bin/env python3
+import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# ---- EDIT THESE TWO PATHS ----
-CSV_OFF = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0532_unsup_outputs_parking_lot_02_Day_nospd\metrics_k10.csv")
-CSV_ON  = Path(r"data\09092025_0900_segcamel_train_output_epoch_50\12092025_0539_unsup_outputs_parking_lot_02_Day_spd\metrics_k10.csv")
-
-META_COLS = {"frame","stem","seq","path","timestamp","mode","K","notes"}
-# metric groups used for separate figures
-GROUPS = {
-    "intrinsic": ["silhouette","dbi","ch","calinski","davies"],
-    "velocity":  ["nmi_speedbins","f1_dyn","velvar"],
-    # add more groups if needed, e.g. "coverage","noise","stability"
+# ====== EDIT THIS MAPPING TO YOUR runs ======
+RUNS = {
+    "A1_RI_speedOFF":   r"data\22092025_0511_segcamel_train_output_epoch_50_ri\20250924_1150_unsup_outputs_river_island_01_Day_ri\metrics_k10.csv",
+    "A2_RVI_speedOFF":  r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250924_0614_unsup_outputs_river_island_01_Day_rvi_nspd\metrics_k10.csv",
+    "A3_RVI_speedON":   r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250924_0437_unsup_outputs_river_island_01_Day_rvi\metrics_k10.csv",
+    # Optional extras:
+    # "R3b_strict_deadzone": "/path/to/R3b/metrics.csv",
+    # "K15": "/path/to/K15/metrics.csv",
+    # "smooth2": "/path/to/smooth2/metrics.csv",
 }
+OUTDIR = Path(r"data\New folder")
+OUTDIR.mkdir(parents=True, exist_ok=True)
 
-def read_any_csv(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, sep=None, engine="python")
-    if df.shape[1] == 1:
-        for sep in [";", "\t", "|"]:
-            try:
-                t = pd.read_csv(path, sep=sep, engine="python")
-                if t.shape[1] > 1:
-                    df = t; break
-            except Exception: pass
-    print(f"[read] {path.name}: rows={len(df)} cols={len(df.columns)} | cols={list(df.columns)}")
-    return df
+# ====== Columns your pipeline writes ======
+COLS = [
+    "N","K","CH","DBI","SIL",
+    "NMI_speedbins",
+    "velvar_wmean",
+    "temporal_consistency",
+    "F1_dyn@0.30mps","F1_dyn@0.50mps","F1_dyn@1.00mps"
+]
 
-def long_to_wide(df: pd.DataFrame) -> pd.DataFrame:
-    cols = [c.lower() for c in df.columns]
-    if len(df.columns) == 2 and any(c in ("value","score","metric_value") for c in cols):
-        value_col = df.columns[cols.index("value")] if "value" in cols \
-            else (df.columns[cols.index("metric_value")] if "metric_value" in cols else df.columns[cols.index("score")])
-        name_col  = [c for c in df.columns if c != value_col][0]
-        tmp = df[[name_col, value_col]].copy()
-        tmp.columns = ["metric","value"]
-        w = tmp.groupby("metric", as_index=True)["value"].mean().to_frame().T
-        for c in w.columns: w[c] = pd.to_numeric(w[c], errors="coerce")
-        return w
-    return pd.DataFrame()
+def load_last_row(csv_path):
+    df = pd.read_csv(csv_path)
+    # if the CSV contains per-batch rows, take the last one (or mean over unique run)
+    row = df.tail(1).reset_index(drop=True)
+    # keep only known columns if present
+    keep = [c for c in COLS if c in row.columns]
+    return row[keep]
 
-def select_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    keep = [c for c in df.columns if c not in META_COLS and not c.lower().startswith("unnamed")]
-    df = df[keep].copy()
-    for c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.loc[:, df.notna().any(0)]
+# ---- load all runs ----
+records = []
+for name, path in RUNS.items():
+    r = load_last_row(path)
+    r.insert(0, "run", name)
+    records.append(r)
 
-def normalize_metrics_table(df: pd.DataFrame) -> pd.DataFrame:
-    wide = long_to_wide(df)
-    return wide if not wide.empty else select_numeric(df)
+df = pd.concat(records, ignore_index=True)
+df.to_csv(OUTDIR/"results_aggregated.csv", index=False)
 
-def pick_group(df: pd.DataFrame, group_keys) -> pd.DataFrame:
-    cols = [c for c in df.columns if any(k in c.lower() for k in group_keys)]
-    return df[cols].copy()
+# ---- normalisations for plotting (higher is better) ----
+df["CH_norm"] = df["CH"] / df["CH"].max()
+df["DBI_inv_norm"] = (1.0/df["DBI"]) / (1.0/df["DBI"]).max()
+# Optional: invert velocity variance for “higher better”
+df["velvar_inv_norm"] = (1.0/df["velvar_wmean"]) / (1.0/df["velvar_wmean"]).max()
 
-def bar_mean_std(mu_off, mu_on, sd_off, sd_on, title, out):
-    keys = list(mu_off.index)
-    if not keys: return
-    x = np.arange(len(keys)); w = 0.38
-    fig, ax = plt.subplots(figsize=(max(8, len(keys)*0.9), 4.8))
-    ax.bar(x - w/2, mu_off.values, width=w, label="Velocity OFF")
-    ax.bar(x + w/2, mu_on.values,  width=w, label="Velocity ON")
-    ax.errorbar(x - w/2, mu_off.values, yerr=sd_off.values, fmt='none', capsize=3)
-    ax.errorbar(x + w/2, mu_on.values,  yerr=sd_on.values,  fmt='none', capsize=3)
-    ax.set_xticks(x); ax.set_xticklabels(keys, rotation=35, ha="right")
-    ax.set_title(title); ax.grid(axis="y", alpha=0.25); ax.legend()
-    fig.tight_layout(); fig.savefig(out, dpi=220); plt.close(fig)
-    print("Saved:", out)
+# ------------------ FIG 1: Intrinsic ------------------
+plt.figure(figsize=(8,4))
+x = range(len(df))
+barw = 0.25
 
-def bar_delta_percent(mu_off, mu_on, title, out):
-    keys = list(mu_off.index)
-    if not keys: return
-    off = mu_off.values
-    on  = mu_on.values
-    # percent change; guard divide-by-zero
-    pct = np.where(np.abs(off) > 1e-12, (on - off) / np.abs(off) * 100.0, 0.0)
-    x = np.arange(len(keys))
-    fig, ax = plt.subplots(figsize=(max(8, len(keys)*0.9), 4.2))
-    ax.bar(x, pct)
-    ax.axhline(0, color="k", lw=0.8)
-    ax.set_xticks(x); ax.set_xticklabels(keys, rotation=35, ha="right")
-    ax.set_title(title + "  (percent change)")
-    ax.set_ylabel("%")
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout(); fig.savefig(out, dpi=220); plt.close(fig)
-    print("Saved:", out)
+plt.bar([i- barw for i in x], df["CH_norm"], width=barw, label="CH (norm)")
+plt.bar(x,                    df["SIL"],     width=barw, label="Silhouette")
+plt.bar([i+ barw for i in x], df["DBI_inv_norm"], width=barw, label="1/DBI (norm)")
 
-def main():
-    off_raw = read_any_csv(CSV_OFF)
-    on_raw  = read_any_csv(CSV_ON)
+plt.xticks(list(x), df["run"], rotation=20, ha="right")
+plt.ylabel("Score (↑)")
+plt.title("Intrinsic clustering quality")
+plt.legend()
+plt.tight_layout()
+plt.savefig(OUTDIR/"fig_intrinsic.png", dpi=200)
 
-    off = normalize_metrics_table(off_raw)
-    on  = normalize_metrics_table(on_raw)
+# ------------------ FIG 2: Motion ------------------
+plt.figure(figsize=(8,4))
+# F1 curves vs threshold
+ths = [0.30, 0.50, 1.00]
+for _, row in df.iterrows():
+    y = [row.get(f"F1_dyn@{t:.2f}mps") for t in ths]
+    plt.plot(ths, y, marker="o", label=row["run"])
+plt.xlabel("|v| threshold (m/s)")
+plt.ylabel("F1 dynamic/static (↑)")
+plt.title("Dynamic/static consistency")
+plt.xticks(ths)
+plt.legend()
+plt.tight_layout()
+plt.savefig(OUTDIR/"fig_motion_f1.png", dpi=200)
 
-    # align columns
-    common = [c for c in off.columns if c in on.columns]
-    off, on = off[common].dropna(axis=1, how="all"), on[common].dropna(axis=1, how="all")
+# Bars for NMI and (inverted) vel variance
+plt.figure(figsize=(8,4))
+barw = 0.35
+x = range(len(df))
+plt.bar([i- barw/2 for i in x], df["NMI_speedbins"], width=barw, label="NMI(|v| bins)")
+plt.bar([i+ barw/2 for i in x], df["velvar_inv_norm"], width=barw, label="1/velvar (norm)")
+plt.xticks(list(x), df["run"], rotation=20, ha="right")
+plt.ylabel("Score (↑)")
+plt.title("Motion alignment")
+plt.legend()
+plt.tight_layout()
+plt.savefig(OUTDIR/"fig_motion.png", dpi=200)
 
-    if off.empty or on.empty:
-        print("[ERROR] no common numeric metrics after normalization"); return
+# ------------------ FIG 3: Temporal ------------------
+plt.figure(figsize=(6,4))
+plt.bar(df["run"], df["temporal_consistency"])
+plt.ylabel("Temporal consistency (↑)")
+plt.title("Temporal stability across frames")
+plt.xticks(rotation=20, ha="right")
+plt.tight_layout()
+plt.savefig(OUTDIR/"fig_temporal.png", dpi=200)
 
-    outdir = Path("analysis_figs"); outdir.mkdir(exist_ok=True)
-
-    # save raw means/std + deltas
-    mu_off, sd_off = off.mean(0), off.std(0)
-    mu_on,  sd_on  = on.mean(0),  on.std(0)
-    delta          = mu_on - mu_off
-    (outdir / "mean_off.csv").write_text(mu_off.to_csv(), encoding="utf-8")
-    (outdir / "mean_on.csv").write_text(mu_on.to_csv(),  encoding="utf-8")
-    (outdir / "delta_on_minus_off.csv").write_text(delta.to_csv(), encoding="utf-8")
-
-    # UTF-8 summary
-    summary = (
-        "# Metrics summary\n\n"
-        "## Means (OFF)\n" + mu_off.to_string() + "\n\n"
-        "## Means (ON)\n"  + mu_on.to_string()  + "\n\n"
-        "## Delta (ON - OFF)\n" + delta.to_string() + "\n"
-    )
-    (outdir / "summary.md").write_text(summary, encoding="utf-8")
-
-    # groupwise plots
-    for gname, keys in GROUPS.items():
-        off_g = pick_group(off, keys)
-        on_g  = pick_group(on,  keys)
-        common_g = [c for c in off_g.columns if c in on_g.columns]
-        if not common_g: 
-            print(f"[WARN] no metrics for group '{gname}'"); 
-            continue
-        off_g, on_g = off_g[common_g], on_g[common_g]
-        mu_off_g, sd_off_g = off_g.mean(0), off_g.std(0)
-        mu_on_g,  sd_on_g  = on_g.mean(0),  on_g.std(0)
-
-        bar_mean_std(mu_off_g, mu_on_g, sd_off_g, sd_on_g,
-                     f"Mean±std across frames — {gname}", outdir / f"metrics_mean_std_{gname}.png")
-        bar_delta_percent(mu_off_g, mu_on_g,
-                          f"Velocity impact (ON−OFF) — {gname}", outdir / f"metrics_delta_percent_{gname}.png")
-
-if __name__ == "__main__":
-    main()
+print(f"Saved plots to: {OUTDIR.resolve()}")
