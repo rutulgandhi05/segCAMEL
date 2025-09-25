@@ -58,8 +58,8 @@ cat > "$CFG" <<'JSON'
   "inference_limit": 2000,
 
   "feature_cfg": {
-    "use_range": false,   "range_scale": 70.0,
-    "use_height": false,  "height_scale": 2.5,
+    "use_range": true,   "range_scale": 70.0,
+    "use_height": true,  "height_scale": 2.5,
     "use_speed": true,   "speed_scale": 10.0,
     "speed_deadzone_per_m": 0.01,
     "speed_deadzone_min": 0.1,
@@ -77,7 +77,7 @@ cat > "$CFG" <<'JSON'
   "min_component": 80,
   "range_gate_m": 0.2,
 
-  "posterior_tau": 0.13,
+  "posterior_tau": 0.12,
   "tau_edges": [0.0, 15.0, 30.0, 60.0],
   "tau_map":   [0.12, 0.14, 0.16, 0.18],
 
