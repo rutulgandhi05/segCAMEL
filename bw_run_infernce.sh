@@ -64,22 +64,22 @@ cat > "$CFG" <<'JSON'
     "speed_deadzone_per_m": 0.01,
     "speed_deadzone_min": 0.1,
     "speed_deadzone_max": 0.80,
-    "use_speed_signed": false
+    "use_speed_signed": true
   },
 
-  "max_passes": 3,
+  "max_passes": 2,
   "sample_per_frame": 50000,
   "dist_edges": [0.0, 15.0, 30.0, 60.0, 120.0],
   "dist_ratios": [0.35, 0.30, 0.20, 0.15],
 
   "smooth_iters": 0,
   "neighbor_range": 1,
-  "min_component": 80,
-  "range_gate_m": 0.2,
+  "min_component": 100,
+  "range_gate_m": 0.5,
 
-  "posterior_tau": 0.12,
+  "posterior_tau": 0.15,
   "tau_edges": [0.0, 15.0, 30.0, 60.0],
-  "tau_map":   [0.12, 0.14, 0.16, 0.18],
+  "tau_map":   [0.10, 0.12, 0.14, 0.16],
 
   "metrics": {
     "sample_n": 200000,

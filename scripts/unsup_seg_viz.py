@@ -16,8 +16,8 @@ except Exception:
 
 # ---- CURRENT run (the one you want to view) ----
 INFER_DIR  = Path(r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250924_0137_inference_output_river_island_01_Day_rvi")
-OUT_DIR    = Path(r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250925_0857_unsup_outputs_river_island_01_Day_rvi")
-K          = 8  # used only for initial palette sizing
+OUT_DIR    = Path(r"data\22092025_0509_segcamel_train_output_epoch_50_rvi\20250925_1147_unsup_outputs_river_island_01_Day_rvi")
+K          = 12 # used only for initial palette sizing
 LABELS_DIR = OUT_DIR / f"labels_k{K}"
 LABELS_ZIP = OUT_DIR / f"labels_k{K}.zip"
 PREFER_ZIP = True
