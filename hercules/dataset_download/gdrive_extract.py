@@ -162,10 +162,11 @@ def download_folder_tree(service, folder_id: str, root_out: Path, overwrite: boo
                 stack.append((item["id"], sub_out))
             else:
                 out_path = current_out / name
-                if out_path.parent.name in ["Radar", "PR_GT", "sensor_data"]:
+                if out_path.parent.name in ["Radar", "Calibration", "Image"]:  #"PR_GT", "sensor_data"
                     continue
                 if name.startswith("LiDAR"):
-                    out_path = current_out / "Aeva_data" / name
+                    #out_path = current_out / "Aeva_data" / name
+                    continue
                 download_file(service, item["id"], out_path, overwrite=overwrite)
 
 # ==== I/O for links ====
