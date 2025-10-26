@@ -1,13 +1,12 @@
 # segCAMEL
-
->## Description:
+## Description:
 ### Project: Unsupervised Segmentation of FMCW LiDAR Point-clouds via Features Distilled from 2D Images
 
 >### Abstract
 >"Unsupervised segmentation of outdoor LiDAR point clouds remains difficult because geometric cues alone provide limited semantics and large-scale 3D annotations are scarce. At the same time, frequencymodulated continuous-wave (FMCW) LiDAR introduces Doppler velocity signals, but their potential for segmentation has been largely overlooked. Prior research has explored unsupervised learning from LiDAR or fusion with images, yet most pipelines ignore FMCW’s unique motion cues and treat scans as static. In this work, we introduce a cross-modal approach that projects features from a frozen2D vision foundation model (vfm) onto camera-visible points, distills them into a transformer-based 3D backbone with a cosine regression loss, and clusters the resulting embeddings using a von Mises–Fisher (vMF) mixture. Our framework requires no manual labels, operates directly on LiDAR at inference, and can optionally incorporate perpoint radial velocity. By transferring semantic priors from images into 3D and probing the role of Doppler signals, this study highlights cross-modal distillation as a strong path toward label-free 3D segmentation and points to tighter integration of FMCW velocity as an important direction forward."
 
 
-> ## Requiremnets
+## Requiremnets
 Python 3.12.1
 
 Cuda 12.8
@@ -25,7 +24,7 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-> ## Run pipeline
+## Run pipeline
 
 1. Set enviornment variables as below:
 ```
@@ -58,7 +57,7 @@ python -m scripts.preprocess
 python -m scripts.train_segmentation
 ```
 
-> ## Inference
+## Inference
 
 1. Create config.json in repo root and copy paste below code into the file.
 ```
@@ -136,7 +135,7 @@ python -m scripts.preprocess
 python -m scripts.segment_once
 ```
 
-> ## Download HeRCULES dataset
+## Download HeRCULES dataset
 1. Request HeRCULES dataset
     1. Go to the dataset download form: https://sites.google.com/view/herculesdataset/download?authuser=0
     2. Fill the form and click submit
