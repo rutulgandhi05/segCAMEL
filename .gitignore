@@ -210,6 +210,7 @@ lidar_camera_calibration.py
 logs/*
 analysis_figs/*
 
+run/*
 bw_download_hercules.sh
 bw_run_infernce.sh
 bw_run_pipeline.sh
