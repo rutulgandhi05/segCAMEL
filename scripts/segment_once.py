@@ -41,7 +41,7 @@ USE_FP16_MATMUL   = True
 SEED              = 42
 
 # --- Execution toggles ---
-RUN_INFERENCE = False    # set True to call inference.py first
+RUN_INFERENCE = True    # set True to call inference.py first
 DO_FIT        = True    # learn prototypes (False -> load from PROTOS_PATH)
 MET_OVERRIDES = None  # will be filled if config provides metrics
 

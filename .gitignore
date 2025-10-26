@@ -178,6 +178,7 @@ cython_debug/
 hercules/dataset_download/token.pickle 
 hercules/dataset_download/hercules.json
 hercules/dataset_download/temp.toml
+hercules/dataset_download/to_download.toml
 
 test*
 test.jpg
@@ -208,3 +209,12 @@ hercules_output.txt
 lidar_camera_calibration.py
 logs/*
 analysis_figs/*
+
+bw_download_hercules.sh
+bw_run_infernce.sh
+bw_run_pipeline.sh
+bw_run_preprocess.sh
+bw_run_train.sh
+
+models/dust3r/*
+models/croco/*

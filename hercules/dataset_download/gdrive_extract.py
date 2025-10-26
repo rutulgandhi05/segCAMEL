@@ -4,7 +4,7 @@ import re
 import json
 import pickle
 from pathlib import Path
-from typing import Iterable, List, Optional, Dict
+from typing import Iterable, List, Optional
 
 import tqdm
 from google.oauth2.credentials import Credentials
@@ -188,36 +188,36 @@ def main():
     out_root_path = Path(out_root)
     out_root_path.mkdir(parents=True, exist_ok=True)
 
-    # Gather links
+    # Gather link. Place links recieved from hercules via mail here.
     links= {
-        "mountain_01_Day": "https://drive.google.com/drive/folders/1wCiKVe8Y-bWyepBunTH2-5m_mYOUsfG1",
-        "mountain_02_Night": "https://drive.google.com/drive/folders/1z2X5AH1qifqWMqx_Nfl_4muL-5rr8kKB",
-        "mountain_03_Day": "https://drive.google.com/drive/folders/1skmNOrXPsmSFuGDyyJA2c3yrgrn6-inB",
+        "mountain_01_Day": "",
+        "mountain_02_Night": "",
+        "mountain_03_Day": "",
 
-        "library_01_Day": "https://drive.google.com/drive/folders/16eG7GaqhAg6n77j6IOyyaHKAAi0sZ5xd",
-        "library_02_Night": "https://drive.google.com/drive/folders/1St_rfYYoPDZqdy8sE5oaZymeFu0fFOy4",
-        "library_03_Day": "https://drive.google.com/drive/folders/12Jxx8BmVA4_sXL-mLB0QkpMJYAUYyXeT",
+        "library_01_Day": "",
+        "library_02_Night": "",
+        "library_03_Day": "",
 
-        "sports_complex_01_Day": "https://drive.google.com/drive/folders/1V49r3LV1ZgIrBfZ0R-dZrD9LOJcPRYHu",
-        "sports_complex_02_Night": "https://drive.google.com/drive/folders/1U6sgNjkwGRz62u4Ccu90x7ayjcZZsVLv",
-        "sports_complex_03_Day": "https://drive.google.com/drive/folders/17YOns5CZ-ZI6O3_hyssGEyu2jY-NAG_I",
+        "sports_complex_01_Day": "",
+        "sports_complex_02_Night": "",
+        "sports_complex_03_Day": "",
 
-        "parking_lot_01_Day": "https://drive.google.com/drive/folders/11TscwgTWJQrvK-nCh-bQmMmZi6efvy3F",
-        "parking_lot_02_Day": "https://drive.google.com/drive/folders/1jqy4qKaqFldQFgPh7FOr5nY9KvTsQKOP",
-        "parking_lot_03_Night": "https://drive.google.com/drive/folders/1bRNLyLmQXQjkJZAMUnKfbsosvJq2d9Gs",
-        "parking_lot_04_Day": "https://drive.google.com/drive/folders/1czW3NfsTie2Y0nY8pBf9filCMA1xhhF3",
+        "parking_lot_01_Day": "",
+        "parking_lot_02_Day": "",
+        "parking_lot_03_Night": "",
+        "parking_lot_04_Day": "",
 
-        "river_island_01_Day": "https://drive.google.com/drive/folders/1cXDV1tlLEwTJ84WrUUw63pfjAYBxB5jf",
-        "river_island_02_Day": "https://drive.google.com/drive/folders/1N8XsY0lrgRHk_AyM0NXJyvVWcMdpOE1f",
-        "river_island_03_Dusk": "https://drive.google.com/drive/folders/1HFyiXR24aMUcsETBQedOc1iGvM5M0opt",
+        "river_island_01_Day": "",
+        "river_island_02_Day": "",
+        "river_island_03_Dusk": "",
 
-        "bridge_01_Day": "https://drive.google.com/drive/folders/15H9-bKbUtR30EplhBY2PxRwFfHJuvYgi",
-        "bridge_02_Night": "https://drive.google.com/drive/folders/1Z8uyJGEhFmA2_y7bjRtg25Z1nWMoWbhc",
+        "bridge_01_Day": "",
+        "bridge_02_Night": "",
 
-        "street_01_Day": "https://drive.google.com/drive/folders/1nKImvF3pvS3-tBBtnJ3P24mVka5QW9-2",
+        "street_01_Day": "",
 
-        "stream_01_Day": "https://drive.google.com/drive/folders/1ZVNBr8ITKWk2i7J_mYEwF-XYJIfkQJx0",
-        "stream_02_Night": "https://drive.google.com/drive/folders/11NllaiL5-4ziNcH4EQ7hSon2Atqg9JN9"
+        "stream_01_Day": "",
+        "stream_02_Night": ""
     }
 
 

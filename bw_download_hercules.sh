@@ -15,6 +15,6 @@ export HERCULES_DATASET=$(ws_find hercules_dataset_complete)
 export TMP_HERCULES_DATASET=$TMPDIR/hercules_dataset
 source venv/bin/activate
 module load devel/cuda/12.8
-python -m hercules.dataset_download.gdrive_extract
+c
 
 cp -r --verbose $TMP_HERCULES_DATASET/* $HERCULES_DATASET/
