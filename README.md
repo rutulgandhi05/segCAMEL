@@ -156,3 +156,31 @@ export TMP_HERCULES_DATASET=path/to/hercules_dataset
 python -m hercules.dataset_download.gdrive_extract
 ```
 > NOTE: If prompted, sign into google with email that was used to request the dataset.
+
+## Evaluation
+To evaluate and read metrices.csv generated after inference with different feature mode you can edit and run scripts/analyze_metrices.py
+
+## Visualization
+To viusalize segmentation results edit the path variable and run scripts/unsup_seg_viz.py.
+
+Use following keybinds for visuliztion window
+
+- N = next_frame
+- P = prev_frame
+-  ] = inc_ps
+-  [ = dec_ps
+-  R = reset_v
+-  G = toggle_mode  labels <-> range
+-  S = cycle_speed  off -> |v| -> signed -> fused
+-  M = cycle_label_policy id <-> by_speed
+
+τ controls 
+- = = tau_inc
+- \+ = tau_inc
+- \- = tau_dec
+- _ = tau_dec
+- K = tau_inc         # backups
+- J = tau_dec
+- V = toggle_fade
+- C = cycle_palette
+- Q = quit_v
